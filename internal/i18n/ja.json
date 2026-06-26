@@ -1,0 +1,16 @@
+{
+  "scanning": "LocalSend デバイスをスキャン中...",
+  "no_devices": "デバイスが見つかりませんでした。",
+  "select_device": "送信先デバイスを選択してください:",
+  "sending_files": "{{.Alias}} へファイルを送信中...",
+  "transfer_complete": "転送が正常に完了しました！",
+  "transfer_failed": "転送失敗: {{.Error}}",
+  "transfer_rejected": "受信側に転送を拒否されました。",
+  "receiving_mode": "ポート {{.Port}} で受信待機中... (別名: {{.Alias}})",
+  "receiving_request": "{{.Alias}} ({{.IP}}) からの受信リクエストがあります:",
+  "confirm_receive": "{{.Count}} 個のファイル ({{.Size}} バイト) を受け入れますか？ (y/n): ",
+  "saving_to": "ファイルの保存先: {{.Path}}",
+  "download_api_started": "ブラウザ転送が開始されました。ブラウザで以下のURLにアクセスしてください:\n  http://{{.IP}}:{{.Port}}",
+  "port_bind_failed": "ポート {{.Port}} の受信待機に失敗、{{.NextPort}} で接続を試みます...",
+  "all_port_bind_failed": "ポート {{.MaxPort}} までの受信待機に全て失敗しました。"
+}

@@ -1,0 +1,16 @@
+{
+  "scanning": "Scanning for LocalSend devices...",
+  "no_devices": "No devices found.",
+  "select_device": "Select a device to send files:",
+  "sending_files": "Sending files to {{.Alias}}...",
+  "transfer_complete": "Transfer completed successfully!",
+  "transfer_failed": "Transfer failed: {{.Error}}",
+  "transfer_rejected": "Transfer rejected by receiver.",
+  "receiving_mode": "Waiting for files on port {{.Port}}... (Alias: {{.Alias}})",
+  "receiving_request": "Receive request from {{.Alias}} ({{.IP}}):",
+  "confirm_receive": "Do you want to accept {{.Count}} files ({{.Size}} bytes)? (y/n): ",
+  "saving_to": "Saving files to: {{.Path}}",
+  "download_api_started": "Browser transfer started. Access this URL on your browser:\n  http://{{.IP}}:{{.Port}}",
+  "port_bind_failed": "Failed to bind to port {{.Port}}, trying {{.NextPort}}...",
+  "all_port_bind_failed": "All attempts to bind up to port {{.MaxPort}} failed."
+}

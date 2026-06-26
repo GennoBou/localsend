@@ -1,0 +1,12 @@
+{
+  "name": "localsend",
+  "version": "1.0.0",
+  "description": "Go implementation of LocalSend protocol CLI/Daemon",
+  "scripts": {
+    "build": "go build -o bin/localsend.exe cmd/localsend/main.go",
+    "dev": "bin\\localsend.exe receive --debug"
+  },
+  "keywords": [],
+  "author": "gennobou.com",
+  "license": "MIT"
+}
