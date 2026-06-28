@@ -1,0 +1,38 @@
+name: Code Review
+on:
+    pull_request:
+        types: [opened, reopened, synchronize, ready_for_review]
+        branches:
+            - main # change this to your target branch
+    workflow_dispatch: # Allows you to run the workflow manually from the Actions tab
+
+permissions: # necessary permissions
+    pull-requests: write
+    contents: read
+
+jobs:
+    your-job-name:
+        runs-on: ubuntu-latest
+        name: your-job-name
+        if: github.event.pull_request.draft == false
+        steps:
+            - name: step-name
+              id: step-id
+              uses: murtuzaalisurti/better@v3 # this is the ref of the github action - https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#jobsjob_iduses
+              with:
+                repo-token: ${{ secrets.GITHUB_TOKEN }} # this is auto generated
+                ai-model-api-key: ${{ secrets.MODEL_API_KEY }} # make sure to set this in your repository secrets - /settings/secrets/actions (Settings > Secrets and Variables > Actions > Secrets Tab)
+                platform: 'openrouter' # can be 'openai' | 'anthropic' | 'google' | 'openrouter' | 'mistral'
+                ai-model-name: "nvidia/nemotron-3-super-120b-a12b:free"
+                delete-existing-review-by-bot: true #default is true
+                filesToIgnore: '**/*.env; .husky/**; .cache/**; go.sum; package-lock.json; yarn.lock; pnpm-lock.yaml; bin/**; dist/**' # uses glob patterns (micromatch - https://github.com/micromatch/micromatch)
+                rules: |- # Rules to consider for code review
+                    -- It must follow industry standard best practices
+                    -- It should be idiomatic
+                    -- It should be readable
+                    -- It should not contain any security related vulnerabilities
+                    -- It should not contain any sensitive data
+                    -- It should be well structured
+                    -- It should not contain bad patterns
+                    -- Write the review in English first.
+                    -- Then, translate the exact same review content into Japanese and output it below the English review, separated by a horizontal line (---) and a header "### 日本語訳 (Japanese Translation)".
