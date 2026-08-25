@@ -71,11 +71,24 @@ LocalSendプロトコルのデータ型と、CLI等でハンドリングしや�
   ```
 
 ### 2.3 デバイス検出メカニズム (`pkg/discovery`)
+本実装では、以下の3つのディスカバリモード（`--discovery-mode`）をサポートし、環境に合わせたプロトコルの切り替えが可能です。
+
+*   **`hybrid` (デフォルト)**: UDPマルチキャスト、mDNS、HTTPレガシースキャンをすべて同時に実行します。
+*   **`multicast`**: 従来のLocalSend互換として、UDPマルチキャストとHTTPレガシースキャンを実行します。
+*   **`mdns`**: 標準的なmDNS/DNS-SDのみを実行します。
+
+それぞれのメカニズムの動作設計は以下の通りです。
+
 1. **UDPマルチキャスト**:
    - リスナーはソケットバインド時に `SO_REUSEADDR` 等（Goの `net.ListenPacket` に準ずるバインド制御）を有効にし、同一ポートでの送受信競合を防ぎます。
    - **自己ループ（Self-Echo）の抑制**: 受信したアナウンスパケットの `fingerprint` が自身のものと一致する場合は、処理を行わずに即座に破棄します。
-2. **HTTPレガシースキャン (`ScanLegacy`)**:
+2. **mDNS / DNS-SD (`pkg/discovery/mdns.go`)**:
+   - `github.com/pion/mdns/v2` を用いて、`_localsend._tcp.local` サービスを公開（Register）および探索（Browse）します。
+   - 他プロセスとのポート共有のため、`5353` ポートのバインド時に `SO_REUSEADDR` を適用します。
+   - デバイス情報はTXTレコード（`alias`, `version`, `deviceModel`, `deviceType`, `fingerprint`, `protocol`, `download`）にエンコードして伝達されます。
+3. **HTTPレガシースキャン (`ScanLegacy`)**:
    - マルチキャストが通らない環境向けに、ローカルCクラスサブネット（最大255アドレス）へ並行でHTTP POSTを送ります。
+   - **実行制限**: mDNSのみを動作させる `mdns` モード時は、不要なネットワークスキャンを避けるため実行されません。
    - **リソース制御**: バッファ付きチャネル（サイズ64）をセマフォとして使用し、同時並行数を64に制限してゴルーチンリークを防ぎます。
    - **タイムアウト**: `context.WithTimeout` を使用し、各ホストへの接続制限時間を **500ms** とします。
 

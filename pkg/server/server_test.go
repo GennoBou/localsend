@@ -496,3 +496,82 @@ func TestPrepareUpload_204NoContent(t *testing.T) {
 		t.Errorf("expected 204 No Content for duplicate files, got %d", resp.StatusCode)
 	}
 }
+
+// TestHandleUpload_ChecksumValidation tests SHA-256 verification (Protocol v2.2)
+func TestHandleUpload_ChecksumValidation(t *testing.T) {
+	tests := []struct {
+		name           string
+		content        string
+		metaSha256     string
+		expectedStatus int
+		expectSaved    bool
+	}{
+		{
+			name:           "Valid SHA-256 checksum matches",
+			content:        "hello world",
+			metaSha256:     "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9", // sha256 of "hello world"
+			expectedStatus: http.StatusOK,
+			expectSaved:    true,
+		},
+		{
+			name:           "Invalid SHA-256 checksum returns 422",
+			content:        "hello world",
+			metaSha256:     "0000000000000000000000000000000000000000000000000000000000000000",
+			expectedStatus: http.StatusUnprocessableEntity,
+			expectSaved:    false,
+		},
+		{
+			name:           "Empty SHA-256 skips check and succeeds",
+			content:        "hello world",
+			metaSha256:     "",
+			expectedStatus: http.StatusOK,
+			expectSaved:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, cleanupServer := setupTestServer(t)
+			defer cleanupServer()
+
+			fileID := "test-file-" + t.Name()
+			fileName := "test-" + filepath.Base(t.Name()) + ".txt"
+
+			meta := protocol.FileMetadata{
+				ID:       fileID,
+				FileName: fileName,
+				Size:     int64(len(tt.content)),
+				Sha256:   tt.metaSha256,
+				FileType: "text/plain",
+			}
+			filesMeta := map[string]protocol.FileMetadata{meta.ID: meta}
+
+			sessionObj := s.sessionMgr.CreateSession("127.0.0.1", false, filesMeta)
+			token, _, _ := sessionObj.GetFileTokenAndMeta(fileID)
+
+			query := url.Values{}
+			query.Set("sessionId", sessionObj.ID)
+			query.Set("fileId", fileID)
+			query.Set("token", token)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/upload?"+query.Encode(), strings.NewReader(tt.content))
+			req.RemoteAddr = "127.0.0.1:12345"
+			w := httptest.NewRecorder()
+
+			s.handleUpload(w, req)
+
+			resp := w.Result()
+			if resp.StatusCode != tt.expectedStatus {
+				t.Fatalf("expected status %d, got %d", tt.expectedStatus, resp.StatusCode)
+			}
+
+			savedFile := filepath.Join(s.saveDir, fileName)
+			_, err := os.Stat(savedFile)
+			if tt.expectSaved && os.IsNotExist(err) {
+				t.Errorf("expected file %s to be saved, but does not exist", savedFile)
+			} else if !tt.expectSaved && !os.IsNotExist(err) {
+				t.Errorf("expected file %s to be deleted on failure, but it exists", savedFile)
+			}
+		})
+	}
+}

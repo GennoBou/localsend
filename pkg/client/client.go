@@ -1,9 +1,12 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +15,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/GennoBou/localsend/pkg/crypto"
 	"github.com/GennoBou/localsend/pkg/protocol"
 )
@@ -22,6 +26,8 @@ type SendFileSource struct {
 	FileName string
 	Size     int64
 	FileType string
+	Sha256   string
+	Preview  string
 	Open     func() (io.ReadCloser, error) // Callback to open the file dynamically during transfer
 }
 
@@ -104,6 +110,10 @@ func NewClient(myDevice protocol.Device, clientCert *tls.Certificate, proxyURL s
 	httpClient := &http.Client{
 		Transport: transport,
 		Timeout:   0, // Set timeout to unlimited because file transfer can take a long time
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Do not follow HTTP redirects sent by peers (prevent SSRF and open redirect attacks)
+			return http.ErrUseLastResponse
+		},
 	}
 
 	// Leave default to control initial timeouts (like connection establishment) at the Transport level
@@ -151,6 +161,8 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 			FileName: f.FileName,
 			Size:     f.Size,
 			FileType: f.FileType,
+			Sha256:   f.Sha256,
+			Preview:  f.Preview,
 		}
 	}
 
@@ -262,6 +274,10 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 				return fmt.Errorf("failed to verify peer: %w", err)
 			}
 
+			if resp.StatusCode == http.StatusUnprocessableEntity {
+				return fmt.Errorf("upload failed: %w", protocol.ErrChecksumMismatch)
+			}
+
 			if resp.StatusCode != http.StatusOK {
 				return fmt.Errorf("upload failed with status: %d", resp.StatusCode)
 			}
@@ -319,4 +335,32 @@ func (c *Client) Register(ctx context.Context, target *protocol.Device) (*protoc
 		partner.Protocol = target.Protocol
 	}
 	return &partner, nil
+}
+
+// NewTextSendSource creates a SendFileSource for sending a text message.
+func NewTextSendSource(text string) SendFileSource {
+	id := uuid.NewString()
+	bytesData := []byte(text)
+	hasher := sha256.New()
+	hasher.Write(bytesData)
+	hashStr := hex.EncodeToString(hasher.Sum(nil))
+
+	// Short preview for filename
+	preview := text
+	if len(preview) > 30 {
+		preview = preview[:30] + "..."
+	}
+	fileName := preview + ".txt"
+
+	return SendFileSource{
+		ID:       id,
+		FileName: fileName,
+		Size:     int64(len(bytesData)),
+		FileType: "text/plain",
+		Sha256:   hashStr,
+		Preview:  text,
+		Open: func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(bytesData)), nil
+		},
+	}
 }

@@ -102,4 +102,7 @@ var (
 
 	// ErrTransferCanceled is returned when the transfer is canceled.
 	ErrTransferCanceled = errors.New("transfer canceled")
+
+	// ErrChecksumMismatch is returned when the file SHA-256 checksum does not match.
+	ErrChecksumMismatch = errors.New("checksum mismatch")
 )

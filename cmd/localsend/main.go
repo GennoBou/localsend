@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,8 +27,9 @@ import (
 )
 
 var (
-	langFlag  string
-	debugFlag bool
+	langFlag          string
+	debugFlag         bool
+	discoveryModeFlag string
 )
 
 func logDebug(format string, v ...interface{}) {
@@ -41,6 +44,12 @@ var rootCmd = &cobra.Command{
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if langFlag != "" {
 			i18n.SetLanguage(langFlag)
+		}
+		// Validate discovery-mode
+		mode := discovery.DiscoveryMode(strings.ToLower(discoveryModeFlag))
+		if mode != discovery.DiscoveryModeHybrid && mode != discovery.DiscoveryModeMulticast && mode != discovery.DiscoveryModeMDNS {
+			fmt.Printf("Error: invalid discovery-mode %q. Allowed values: hybrid, multicast, mdns\n", discoveryModeFlag)
+			os.Exit(1)
 		}
 	},
 }
@@ -74,14 +83,15 @@ var scanCmd = &cobra.Command{
 			discoveredDevices.Store(key, dev)
 		}
 
-		// Start multicast listener (no response needed)
-		_ = discovery.StartMulticastListener(ctx, myDevice, onDiscover, func(dev protocol.Device) {})
+		// Start listeners and advertising using the selected mode
+		mode := discovery.DiscoveryMode(strings.ToLower(discoveryModeFlag))
+		_ = discovery.StartListeners(ctx, myDevice, mode, onDiscover, func(dev protocol.Device) {})
+		_, _ = discovery.StartAdvertising(ctx, myDevice, mode, true)
 
-		// Request discovery
-		_ = discovery.SendAnnounce(myDevice, true)
-
-		// Start Legacy HTTP scan
-		go discovery.ScanLegacy(ctx, myDevice, onDiscover)
+		// Start Legacy HTTP scan (only for hybrid or multicast mode)
+		if mode == discovery.DiscoveryModeHybrid || mode == discovery.DiscoveryModeMulticast {
+			go discovery.ScanLegacy(ctx, myDevice, onDiscover)
+		}
 
 		// Wait until timeout
 		<-ctx.Done()
@@ -272,13 +282,21 @@ var receiveCmd = &cobra.Command{
 			}()
 		}
 
-		err = discovery.StartMulticastListener(ctx, myDevice, onDiscover, onAnnounce)
+		mode := discovery.DiscoveryMode(strings.ToLower(discoveryModeFlag))
+		err = discovery.StartListeners(ctx, myDevice, mode, onDiscover, onAnnounce)
 		if err != nil {
-			logDebug("マルチキャストリスナーの起動失敗: %v", err)
+			logDebug("ディスカバリリスナーの起動失敗: %v", err)
 		} else {
-			logDebug("マルチキャストリスナーを正常に起動しました")
+			logDebug("ディスカバリリスナーを正常に起動しました")
 		}
-		_ = discovery.SendAnnounce(myDevice, false)
+
+		advertiserCloser, errAdv := discovery.StartAdvertising(ctx, myDevice, mode, false)
+		if errAdv != nil {
+			logDebug("ディスカバリ広告の登録失敗: %v", errAdv)
+		} else {
+			logDebug("ディスカバリ広告を正常に登録しました")
+			defer advertiserCloser.Close()
+		}
 
 		fmt.Println(i18n.T("receiving_mode", map[string]interface{}{
 			"Port":  port,
@@ -295,8 +313,8 @@ var receiveCmd = &cobra.Command{
 
 var sendCmd = &cobra.Command{
 	Use:   "send [files...]",
-	Short: "Send files to another device",
-	Args:  cobra.MinimumNArgs(1),
+	Short: "Send files or text to another device",
+	Args:  cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		targetAddr, _ := cmd.Flags().GetString("target")
 		yes, _ := cmd.Flags().GetBool("yes")
@@ -305,8 +323,18 @@ var sendCmd = &cobra.Command{
 		ca, _ := cmd.Flags().GetString("ca")
 		pin, _ := cmd.Flags().GetString("pin")
 		browserMode, _ := cmd.Flags().GetBool("browser")
+		textMsg, _ := cmd.Flags().GetString("text")
+
+		if len(args) == 0 && textMsg == "" {
+			fmt.Println("Error: specify at least one file or use --text (-t) to send a message.")
+			os.Exit(1)
+		}
 
 		var files []client.SendFileSource
+		if textMsg != "" {
+			files = append(files, client.NewTextSendSource(textMsg))
+		}
+
 		for _, arg := range args {
 			info, err := os.Stat(arg)
 			if err != nil {
@@ -319,11 +347,17 @@ var sendCmd = &cobra.Command{
 			}
 
 			filePath := arg
+			hashStr, err := computeFileSha256(filePath)
+			if err != nil {
+				logDebug("Failed to compute sha256 for %s: %v", filePath, err)
+			}
+
 			files = append(files, client.SendFileSource{
 				ID:       uuid.NewString(),
 				FileName: filepath.Base(filePath),
 				Size:     info.Size(),
 				FileType: "application/octet-stream",
+				Sha256:   hashStr,
 				Open: func() (io.ReadCloser, error) {
 					return os.Open(filePath)
 				},
@@ -439,9 +473,13 @@ var sendCmd = &cobra.Command{
 				discoveredDevices.Store(key, dev)
 			}
 
-			_ = discovery.StartMulticastListener(ctx, myDevice, onDiscover, func(dev protocol.Device) {})
-			_ = discovery.SendAnnounce(myDevice, true)
-			go discovery.ScanLegacy(ctx, myDevice, onDiscover)
+			mode := discovery.DiscoveryMode(strings.ToLower(discoveryModeFlag))
+			_ = discovery.StartListeners(ctx, myDevice, mode, onDiscover, func(dev protocol.Device) {})
+			_, _ = discovery.StartAdvertising(ctx, myDevice, mode, true)
+			// Start Legacy HTTP scan (only for hybrid or multicast mode)
+			if mode == discovery.DiscoveryModeHybrid || mode == discovery.DiscoveryModeMulticast {
+				go discovery.ScanLegacy(ctx, myDevice, onDiscover)
+			}
 
 			<-ctx.Done()
 			cancel()
@@ -564,6 +602,7 @@ var sendCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language to use (en, ja)")
 	rootCmd.PersistentFlags().BoolVar(&debugFlag, "debug", false, "Enable debug logging")
+	rootCmd.PersistentFlags().StringVar(&discoveryModeFlag, "discovery-mode", "hybrid", "Discovery mode (hybrid, multicast, mdns)")
 
 	scanCmd.Flags().Bool("json", false, "Output results in JSON format")
 	scanCmd.Flags().Float64("timeout", 2.5, "Scan timeout in seconds")
@@ -585,6 +624,7 @@ func init() {
 	sendCmd.Flags().String("ca", "", "Path to custom CA certificate file")
 	sendCmd.Flags().String("pin", "", "PIN code required by target device")
 	sendCmd.Flags().Bool("browser", false, "Start reverse transfer in browser mode")
+	sendCmd.Flags().StringP("text", "t", "", "Send a text message instead of or in addition to files")
 	rootCmd.AddCommand(sendCmd)
 }
 
@@ -593,4 +633,19 @@ func main() {
 		fmt.Printf("Command execution failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// computeFileSha256 computes the SHA-256 checksum of a file given its path.
+func computeFileSha256(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }

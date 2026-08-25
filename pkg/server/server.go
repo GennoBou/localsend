@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -337,6 +339,9 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	hasher := sha256.New()
+	writer := io.MultiWriter(file, hasher)
+
 	// Copy data while monitoring progress
 	buffer := make([]byte, 32*1024)
 	var written int64
@@ -352,7 +357,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 		nr, er := r.Body.Read(buffer)
 		if nr > 0 {
-			nw, ew := file.Write(buffer[:nr])
+			nw, ew := writer.Write(buffer[:nr])
 			if nw > 0 {
 				written += int64(nw)
 				sessionObj.UpdateProgress(fileID, written)
@@ -374,6 +379,17 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			http.Error(w, "Read error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Verify SHA-256 checksum if provided in prepare-upload metadata (LocalSend Protocol v2.2)
+	if fileMeta.Sha256 != "" {
+		calculatedHash := hex.EncodeToString(hasher.Sum(nil))
+		if !strings.EqualFold(calculatedHash, fileMeta.Sha256) {
+			file.Close()
+			_ = os.Remove(savedPath)
+			http.Error(w, "Checksum mismatch", http.StatusUnprocessableEntity)
 			return
 		}
 	}

@@ -1,4 +1,4 @@
-# LocalSend プロトコル仕様書 (v2.1 準拠 + Go実装拡張)
+# LocalSend プロトコル仕様書 (v2.2 準拠 + Go実装拡張)
 
 ---
 
@@ -8,7 +8,7 @@
 
 ---
 
-本ドキュメントは、LocalSendプロトコル v2.1 の仕様と、本Go実装における独自拡張（複数アプリの同時動作に対応するデバイスキー管理）について定義した日本語の仕様書です。
+本ドキュメントは、LocalSendプロトコル v2.2 の仕様と、本Go実装における独自拡張（複数アプリの同時動作に対応するデバイスキー管理）について定義した日本語の仕様書です。
 
 ---
 
@@ -70,7 +70,14 @@ mTLSの提示が無い接続（`VerifyClientCertIfGiven` で証明書なしの�
 
 ## 3. デバイス検出 (Discovery)
 
+本Go実装では、ネットワーク環境やセキュリティポリシーに応じて以下の3つのディスカバリモード（`--discovery-mode`）を切り替えることができます。
+
+*   **`hybrid`（デフォルト）**: 接続性を最大化するため、UDPマルチキャスト、mDNS、およびHTTPレガシースキャンをすべて並行して動作させます。
+*   **`multicast`**: 従来のLocalSend公式互換モード。UDPマルチキャストおよびHTTPレガシースキャンのみを動作させます。
+*   **`mdns`**: IETF標準（RFC 6762/6763）に基づくmDNS/DNS-SDのみを動作させます。このモードでは不要なネットワークトラフィックを防ぐため、HTTPレガシースキャンは実行されません。
+
 ### 3.1 UDPマルチキャストによる検出
+（`hybrid` または `multicast` モード時に有効）
 アプリの起動時または更新時に、以下のUDPパケットをマルチキャストアドレス（`224.0.0.167:53317`）に向けて送信します。
 
 **アナウンスJSON (送信データ)**
@@ -89,8 +96,22 @@ mTLSの提示が無い接続（`VerifyClientCertIfGiven` で証明書なしの�
 ```
 ※ `announce` が `true` の場合、これを受信した他デバイスは自動的に以下の登録API (`POST /api/localsend/v2/register`) を用いて、自身のデバイス情報を送信元IPに対して返信します。
 
-### 3.2 登録API (POST `/api/localsend/v2/register`)
-マルチキャストの応答、またはマルチキャストが届かない場合のレガシーユニキャストスキャン時に使用します。
+### 3.2 mDNS (Multicast DNS) / DNS-SD による検出
+（`hybrid` または `mdns` モード時に有効）
+標準ポート `5353` (UDP) を使用し、`_localsend._tcp` サービスタイプ、および `local` ドメインで自身のデバイス情報を広告し、また他デバイスを探索します。
+デバイス情報は DNS-SD の **TXT レコード** にキーバリュー形式でエンコードされて送信されます。
+
+- **TXTレコードのマッピング**:
+  - `alias=<Alias>`
+  - `version=<ProtocolVersion>` (通常 `"2.0"`)
+  - `deviceModel=<DeviceModel>`
+  - `deviceType=<DeviceType>`
+  - `fingerprint=<Fingerprint>`
+  - `protocol=<Protocol>`
+  - `download=<download (true/false)>`
+
+### 3.3 登録API (POST `/api/localsend/v2/register`)
+マルチキャストの応答、またはマルチキャストが届かない場合のレガシーユニキャストスキャン（`hybrid` または `multicast` モード時に実行）時に使用します。
 
 **リクエストボディ (JSON)**
 ```json
@@ -181,6 +202,13 @@ mTLSの提示が無い接続（`VerifyClientCertIfGiven` で証明書なしの�
 - パスパラメータ: `POST /api/localsend/v2/upload?sessionId=upload_session_uuid&fileId=file_uuid_1&token=file_transfer_token_1`
 - リクエストボディ: 送信対象ファイルの生のバイナリデータ。
 - レスポンス: HTTPステータス `200 OK` (ボディなし)。
+- **整合性検証 (v2.2仕様)**: `/prepare-upload` のメタデータに `sha256` が指定されていた場合、受信側は受信バイナリの SHA-256 ハッシュを計算し、一致しない場合は HTTP ステータス `422 (Unprocessable Entity)` を返却して一時ファイルを削除します。
+- エラーレスポンス:
+  - `400`: 必須パラメータ不足。
+  - `403`: 無効なトークンまたは送信元IP不一致。
+  - `409`: 他のセッションによる転送が実行中のためブロック。
+  - `422`: チェックサム不一致 (`sha256 mismatch`)。
+  - `500`: 受信側の内部エラー。
 
 ### 4.3 セッションキャンセル (POST `/api/localsend/v2/cancel`)
 送信側または受信側が転送を途中でキャンセルする場合に呼び出します。

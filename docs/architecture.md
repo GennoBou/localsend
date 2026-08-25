@@ -71,11 +71,24 @@ Defines the standard LocalSend structures and custom errors to ease handling in 
   ```
 
 ### 2.3 Discovery Mechanism (`pkg/discovery`)
+This Go implementation supports three discovery modes (`--discovery-mode`) to control how devices are discovered and advertised:
+
+*   **`hybrid` (Default)**: Concurrently runs UDP multicast, mDNS, and HTTP legacy scan.
+*   **`multicast`**: Runs UDP multicast and HTTP legacy scan only (original behavior).
+*   **`mdns`**: Runs mDNS/DNS-SD only.
+
+The details of each mechanism are as follows:
+
 1. **UDP Multicast**:
    - The receiver enables `SO_REUSEADDR` (or equivalent socket controls in Go) to prevent conflicts between the listener and broadcaster on port `53317`.
    - **Self-Echo Suppression**: If the received announcement payload's `fingerprint` matches the node's own fingerprint, the packet is discarded immediately.
-2. **HTTP Legacy Scan (`ScanLegacy`)**:
+2. **mDNS / DNS-SD (`pkg/discovery/mdns.go`)**:
+   - Uses `github.com/pion/mdns/v2` to publish (Register) and browse (Browse) `_localsend._tcp.local` services.
+   - Binds to port `5353` with `SO_REUSEADDR` enabled to share the port with other system mDNS processes.
+   - Device attributes are encoded in TXT records (`alias`, `version`, `deviceModel`, `deviceType`, `fingerprint`, `protocol`, `download`).
+3. **HTTP Legacy Scan (`ScanLegacy`)**:
    - Performs a legacy scan by sending HTTP POST requests to `/api/localsend/v2/register` across the local C-class subnet (up to 255 addresses).
+   - **Execution Constraint**: Disabled when `mdns` mode is selected to prevent unnecessary network sweeps.
    - **Resource Control**: Employs a buffered channel (size 64) as a semaphore to limit concurrent requests to 64, avoiding goroutine leaks.
    - **Timeout**: Enforces a strict **500ms** connection timeout via `context.WithTimeout` per host.
 

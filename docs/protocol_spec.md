@@ -1,4 +1,4 @@
-# LocalSend Protocol Specification (v2.1 Compliant + Go Implementation Extension)
+# LocalSend Protocol Specification (v2.2 Compliant + Go Implementation Extension)
 
 ---
 
@@ -8,7 +8,7 @@
 
 ---
 
-This document defines the LocalSend protocol v2.1 specification and the custom extension adopted in this Go implementation to support multiple app instances running on a single host.
+This document defines the LocalSend protocol v2.2 specification and the custom extension adopted in this Go implementation to support multiple app instances running on a single host.
 
 ---
 
@@ -70,7 +70,14 @@ For connections without client certificates (e.g., standard official clients und
 
 ## 3. Discovery
 
+This Go implementation supports three discovery modes (`--discovery-mode`) to control how devices are advertised and searched on the network:
+
+*   **`hybrid` (Default)**: Runs UDP multicast, mDNS, and HTTP legacy scan concurrently to maximize connectivity.
+*   **`multicast`**: Conforms to the standard LocalSend behavior by running UDP multicast and HTTP legacy scan only.
+*   **`mdns`**: Runs mDNS/DNS-SD (RFC 6762/6763) only. To avoid unnecessary network scans, HTTP legacy scan is disabled in this mode.
+
 ### 3.1 UDP Multicast Discovery
+(Active in `hybrid` or `multicast` mode)
 Upon startup or refresh, the application broadcasts a UDP announcement packet to the multicast group (`224.0.0.167:53317`).
 
 **Announcement JSON (Request)**
@@ -89,8 +96,22 @@ Upon startup or refresh, the application broadcasts a UDP announcement packet to
 ```
 *Note: If `announce` is `true`, receiving devices must reply to the sender's IP and Port using the Register API (`POST /api/localsend/v2/register`).*
 
-### 3.2 Register API (POST `/api/localsend/v2/register`)
-Used for responding to multicast announcements, and for legacy unicast scanning when multicast is unavailable.
+### 3.2 mDNS (Multicast DNS) / DNS-SD Discovery
+(Active in `hybrid` or `mdns` mode)
+Uses standard UDP port `5353` and the service type `_localsend._tcp` in the `local` domain to register/browse services.
+Device properties are mapped to DNS-SD **TXT records**:
+
+- **TXT Record Fields**:
+  - `alias=<Alias>`
+  - `version=<ProtocolVersion>` (typically `"2.0"`)
+  - `deviceModel=<DeviceModel>`
+  - `deviceType=<DeviceType>`
+  - `fingerprint=<Fingerprint>`
+  - `protocol=<Protocol>`
+  - `download=<download (true/false)>`
+
+### 3.3 Register API (POST `/api/localsend/v2/register`)
+Used for responding to multicast announcements, and for legacy unicast scanning (active in `hybrid` or `multicast` mode) when multicast is unavailable.
 
 **Request Body (JSON)**
 ```json
@@ -175,14 +196,21 @@ The sender submits file metadata to request transfer approval from the receiver.
   - `403`: Request rejected by the receiver.
   - `409`: Transfer blocked by another active session.
 
-### 3.2 Send File (POST `/api/localsend/v2/upload`)
+### 4.2 Send File (POST `/api/localsend/v2/upload`)
 The sender uploads the binary data of a file using the `sessionId`, `fileId`, and the file-specific `token` obtained from `/prepare-upload`.
 
 - **Endpoint**: `POST /api/localsend/v2/upload?sessionId=upload_session_uuid&fileId=file_uuid_1&token=file_transfer_token_1`
 - **Request Body**: Binary file contents.
 - **Response**: HTTP `200 OK` (empty body).
+- **Integrity Verification (v2.2)**: If `sha256` of the file was provided in `/prepare-upload`, the receiver calculates the SHA-256 hash of the received binary data and responds with `422 Unprocessable Entity` on mismatch.
+- **Errors**:
+  - `400`: Missing parameters.
+  - `403`: Invalid token or IP address mismatch.
+  - `409`: Blocked by another active session.
+  - `422`: Checksum mismatch (`sha256`).
+  - `500`: Internal error by receiver.
 
-### 3.3 Cancel (POST `/api/localsend/v2/cancel`)
+### 4.3 Cancel (POST `/api/localsend/v2/cancel`)
 Initiated when either side wants to abort the active transfer session.
 
 - **Endpoint**: `POST /api/localsend/v2/cancel?sessionId=upload_session_uuid`
