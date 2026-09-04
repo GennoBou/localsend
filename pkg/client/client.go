@@ -233,6 +233,8 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 		}
 	}
 
+	uploadBaseURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/upload?sessionId=%s", target.Protocol, target.IP, target.Port, sessionID)
+
 	// 2. Upload each file sequentially
 	for _, f := range files {
 		token, exists := prepResp.Files[f.ID]
@@ -255,7 +257,7 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 				total:    f.Size,
 			}
 
-			uploadURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/upload?sessionId=%s&fileId=%s&token=%s", target.Protocol, target.IP, target.Port, sessionID, f.ID, token)
+			uploadURL := uploadBaseURL + "&fileId=" + f.ID + "&token=" + token
 
 			req, err := http.NewRequestWithContext(ctx, "POST", uploadURL, io.NopCloser(progReader))
 			if err != nil {
