@@ -220,12 +220,9 @@ var receiveCmd = &cobra.Command{
 				"Alias": sender.Alias,
 				"IP":    sender.IP,
 			}))
-			for _, f := range files {
-				fmt.Printf("  - %s (%d bytes)\n", f.FileName, f.Size)
-			}
-
 			var totalSize int64
 			for _, f := range files {
+				fmt.Printf("  - %s (%d bytes)\n", f.FileName, f.Size)
 				totalSize += f.Size
 			}
 
@@ -331,8 +328,11 @@ var sendCmd = &cobra.Command{
 		}
 
 		var files []client.SendFileSource
+		var totalSize int64
 		if textMsg != "" {
-			files = append(files, client.NewTextSendSource(textMsg))
+			textSource := client.NewTextSendSource(textMsg)
+			files = append(files, textSource)
+			totalSize += textSource.Size
 		}
 
 		for _, arg := range args {
@@ -352,10 +352,13 @@ var sendCmd = &cobra.Command{
 				logDebug("Failed to compute sha256 for %s: %v", filePath, err)
 			}
 
+			fileSize := info.Size()
+			totalSize += fileSize
+
 			files = append(files, client.SendFileSource{
 				ID:       uuid.NewString(),
 				FileName: filepath.Base(filePath),
-				Size:     info.Size(),
+				Size:     fileSize,
 				FileType: "application/octet-stream",
 				Sha256:   hashStr,
 				Open: func() (io.ReadCloser, error) {
@@ -517,10 +520,6 @@ var sendCmd = &cobra.Command{
 		}
 
 		if !yes {
-			var totalSize int64
-			for _, f := range files {
-				totalSize += f.Size
-			}
 			fmt.Println()
 			fmt.Printf("Target: %s (%s)\n", targetDevice.Alias, targetDevice.DeviceModel)
 			fmt.Printf("Files: %d files (%d bytes)\n", len(files), totalSize)

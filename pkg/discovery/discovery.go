@@ -13,7 +13,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/GennoBou/localsend/pkg/protocol"
 )
@@ -392,25 +391,14 @@ func setMulticastSocketOptions(conn *net.UDPConn, ip net.IP) error {
 			// 1. IP_MULTICAST_IF: Explicitly specify the transmission interface (for Windows)
 			var addr [4]byte
 			copy(addr[:], ip4)
-			socketErr = syscall.Setsockopt(
-				syscall.Handle(fd),
-				syscall.IPPROTO_IP,
-				syscall.IP_MULTICAST_IF,
-				(*byte)(unsafe.Pointer(&addr[0])),
-				4,
-			)
+			socketErr = setSockoptInterface(fd, addr)
 			if socketErr != nil {
 				return
 			}
 		}
 
 		// 2. IP_MULTICAST_LOOP: Explicitly enable loopback to the host itself
-		socketErr = syscall.SetsockoptInt(
-			syscall.Handle(fd),
-			syscall.IPPROTO_IP,
-			syscall.IP_MULTICAST_LOOP,
-			1,
-		)
+		socketErr = setSockoptLoop(fd)
 	})
 
 	if err != nil {
@@ -427,7 +415,7 @@ func startWindowsMulticastListener(ctx context.Context, addr *net.UDPAddr, inter
 		Control: func(network, address string, c syscall.RawConn) error {
 			return c.Control(func(fd uintptr) {
 				// Set SO_REUSEADDR to allow multiple binds on Windows
-				_ = syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				_ = setSockoptReuseAddr(fd)
 			})
 		},
 	}
@@ -465,10 +453,10 @@ func startWindowsMulticastListener(ctx context.Context, addr *net.UDPAddr, inter
 	var setoptErr error
 	err = rawConn.Control(func(fd uintptr) {
 		for _, ip := range ips {
-			mreq := syscall.IPMreq{}
-			copy(mreq.Multiaddr[:], addr.IP.To4())
-			copy(mreq.Interface[:], ip.To4())
-			err := syscall.SetsockoptIPMreq(syscall.Handle(fd), syscall.IPPROTO_IP, syscall.IP_ADD_MEMBERSHIP, &mreq)
+			var multiaddr, ifAddr [4]byte
+			copy(multiaddr[:], addr.IP.To4())
+			copy(ifAddr[:], ip.To4())
+			err := setSockoptIPMreq(fd, multiaddr, ifAddr)
 			if err != nil {
 				// Log the error but continue as other interfaces might succeed
 				log.Printf("IP_ADD_MEMBERSHIP failed for interface %s: %v", ip, err)
