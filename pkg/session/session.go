@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/GennoBou/localsend/pkg/protocol"
+	"github.com/google/uuid"
 )
 
 // UploadSession manages the state of a single file transfer session.

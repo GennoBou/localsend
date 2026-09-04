@@ -195,7 +195,7 @@ func TestWebShare_Download_Success(t *testing.T) {
 	if !strings.Contains(contentDisp, "filename*=UTF-8''") {
 		t.Errorf("expected Content-Disposition to use UTF-8 RFC 5987, got %s", contentDisp)
 	}
-	
+
 	// UTF-8'' の後のエンコード部分をデコードして期待通りか検証
 	parts := strings.Split(contentDisp, "filename*=UTF-8''")
 	if len(parts) < 2 {

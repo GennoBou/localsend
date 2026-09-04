@@ -90,77 +90,52 @@ func SendAnnounce(myDevice protocol.Device, announce bool) error {
 // StartMulticastListener listens on the UDP multicast port to discover other LocalSend devices.
 // onDiscover is called when a new device is discovered.
 // onAnnounce is called to respond when a message with announce=true is received.
-func StartMulticastListener(ctx context.Context, myDevice protocol.Device, onDiscover func(protocol.Device), onAnnounce func(protocol.Device)) error {
-	addr, err := net.ResolveUDPAddr("udp4", protocol.MulticastAddr)
-	if err != nil {
-		return fmt.Errorf("failed to resolve multicast address: %w", err)
+// processMulticastPacket processes a single received multicast packet buffer.
+// It parses the JSON payload, filters self-echo messages and duplicate packets within 2 seconds,
+// and invokes onDiscover and onAnnounce callbacks accordingly.
+func processMulticastPacket(data []byte, src net.Addr, myDevice protocol.Device, lastReceived *sync.Map, onDiscover func(protocol.Device), onAnnounce func(protocol.Device)) {
+	var msg protocol.AnnounceMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return
 	}
 
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return fmt.Errorf("failed to get network interfaces: %w", err)
+	// Ignore self-echo (packets sent from oneself) unless it comes from a
+	// different process (different port) on the same machine
+	if msg.Fingerprint == myDevice.Fingerprint && msg.Port == myDevice.Port {
+		return
 	}
 
+	// Deduplication: Ignore if duplicate packets (same fingerprint and port)
+	// from the same device are received within a short period (2 seconds)
+	dedupKey := fmt.Sprintf("%s:%d", msg.Fingerprint, msg.Port)
+	if lastTimeVal, ok := lastReceived.Load(dedupKey); ok {
+		if lastTime, ok := lastTimeVal.(time.Time); ok && time.Since(lastTime) < 2*time.Second {
+			return
+		}
+	}
+	lastReceived.Store(dedupKey, time.Now())
+
+	udpAddr, ok := src.(*net.UDPAddr)
+	if !ok {
+		return
+	}
+
+	// Store the source IP address in the device info
+	msg.IP = udpAddr.IP.String()
+
+	onDiscover(msg.Device)
+
+	// Respond (register back) if the partner requests an announce response,
+	// skipping if the partner's port is 0 (not listening)
+	if msg.Announce && msg.Port > 0 {
+		onAnnounce(msg.Device)
+	}
+}
+
+// setupUnixMulticastListeners sets up multicast UDP listeners for active network interfaces
+// with private IPv4 addresses, as well as the wildcard interface.
+func setupUnixMulticastListeners(addr *net.UDPAddr, interfaces []net.Interface, handleConn func(*net.UDPConn)) ([]*net.UDPConn, error) {
 	var listeners []*net.UDPConn
-	var successCount int
-	var lastReceived sync.Map // key: fingerprint+port, value: time.Time
-
-	handleConn := func(conn *net.UDPConn) {
-		buf := make([]byte, 65535)
-		for {
-			n, src, err := conn.ReadFrom(buf)
-			if err != nil {
-				// E.g., when the connection is closed
-				return
-			}
-
-			var msg protocol.AnnounceMessage
-			if err := json.Unmarshal(buf[:n], &msg); err != nil {
-				continue
-			}
-
-			// Ignore self-echo (packets sent from oneself) unless it comes from a
-			// different process (different port) on the same machine
-			if msg.Fingerprint == myDevice.Fingerprint && msg.Port == myDevice.Port {
-				continue
-			}
-
-			// Deduplication: Ignore if duplicate packets (same fingerprint and port)
-			// from the same device are received within a short period (2 seconds)
-			dedupKey := fmt.Sprintf("%s:%d", msg.Fingerprint, msg.Port)
-			if lastTimeVal, ok := lastReceived.Load(dedupKey); ok {
-				if lastTime, ok := lastTimeVal.(time.Time); ok && time.Since(lastTime) < 2*time.Second {
-					continue
-				}
-			}
-			lastReceived.Store(dedupKey, time.Now())
-
-			udpAddr, ok := src.(*net.UDPAddr)
-			if !ok {
-				continue
-			}
-
-			// Store the source IP address in the device info
-			msg.IP = udpAddr.IP.String()
-
-			onDiscover(msg.Device)
-
-			// Respond (register back) if the partner requests an announce response,
-			// skipping if the partner's port is 0 (not listening)
-			if msg.Announce && msg.Port > 0 {
-				onAnnounce(msg.Device)
-			}
-		}
-	}
-
-	// Use a custom multicast listener on Windows
-	if runtime.GOOS == "windows" {
-		err := startWindowsMulticastListener(ctx, addr, interfaces, handleConn)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
 
 	for _, iface := range interfaces {
 		// Target only active and multicast-capable interfaces (excluding loopback)
@@ -192,7 +167,6 @@ func StartMulticastListener(ctx context.Context, myDevice protocol.Device, onDis
 			continue
 		}
 		listeners = append(listeners, conn)
-		successCount++
 		go handleConn(conn)
 	}
 
@@ -201,13 +175,52 @@ func StartMulticastListener(ctx context.Context, myDevice protocol.Device, onDis
 	nilConn, err := net.ListenMulticastUDP("udp4", nil, addr)
 	if err == nil {
 		listeners = append(listeners, nilConn)
-		successCount++
 		go handleConn(nilConn)
 	}
 
-	// Return an error if failed to bind to any interface
-	if successCount == 0 {
-		return fmt.Errorf("failed to listen multicast on any interface")
+	if len(listeners) == 0 {
+		return nil, fmt.Errorf("failed to listen multicast on any interface")
+	}
+
+	return listeners, nil
+}
+
+// StartMulticastListener listens on the UDP multicast port to discover other LocalSend devices.
+// onDiscover is called when a new device is discovered.
+// onAnnounce is called to respond when a message with announce=true is received.
+func StartMulticastListener(ctx context.Context, myDevice protocol.Device, onDiscover func(protocol.Device), onAnnounce func(protocol.Device)) error {
+	addr, err := net.ResolveUDPAddr("udp4", protocol.MulticastAddr)
+	if err != nil {
+		return fmt.Errorf("failed to resolve multicast address: %w", err)
+	}
+
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return fmt.Errorf("failed to get network interfaces: %w", err)
+	}
+
+	var lastReceived sync.Map // key: fingerprint+port, value: time.Time
+
+	handleConn := func(conn *net.UDPConn) {
+		buf := make([]byte, 65535)
+		for {
+			n, src, err := conn.ReadFrom(buf)
+			if err != nil {
+				// E.g., when the connection is closed
+				return
+			}
+			processMulticastPacket(buf[:n], src, myDevice, &lastReceived, onDiscover, onAnnounce)
+		}
+	}
+
+	// Use a custom multicast listener on Windows
+	if runtime.GOOS == "windows" {
+		return startWindowsMulticastListener(ctx, addr, interfaces, handleConn)
+	}
+
+	listeners, err := setupUnixMulticastListeners(addr, interfaces, handleConn)
+	if err != nil {
+		return err
 	}
 
 	go func() {

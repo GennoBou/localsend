@@ -15,9 +15,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/GennoBou/localsend/pkg/crypto"
 	"github.com/GennoBou/localsend/pkg/protocol"
+	"github.com/google/uuid"
 )
 
 // SendFileSource represents the data source of a file to be sent.
