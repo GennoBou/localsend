@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -272,7 +273,7 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 		baseIP := strings.Join(parts[:3], ".") + "."
 
 		for i := 1; i <= 254; i++ {
-			targetIP := fmt.Sprintf("%s%d", baseIP, i)
+			targetIP := baseIP + strconv.Itoa(i)
 			// Skip own IP since it is covered in Step 1
 			if isLocalIP(targetIP, localIPs) {
 				continue
