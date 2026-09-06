@@ -62,3 +62,63 @@ func TestLoadOrGenerateCredentials(t *testing.T) {
 		t.Errorf("Fingerprints mismatch. Expected same fingerprint from cached files. Expected: %s, Got: %s", info1.Fingerprint, info2.Fingerprint)
 	}
 }
+
+func TestLoadOrGenerateCredentials_InvalidFiles(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "localsend-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	certPath := filepath.Join(tempDir, "cert.pem")
+	keyPath := filepath.Join(tempDir, "key.pem")
+
+	// Write invalid data to cert and key files
+	if err := os.WriteFile(certPath, []byte("invalid cert"), 0600); err != nil {
+		t.Fatalf("Failed to write invalid cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("invalid key"), 0600); err != nil {
+		t.Fatalf("Failed to write invalid key: %v", err)
+	}
+
+	// Should fallback to generating new credentials and overwriting invalid files
+	info, err := LoadOrGenerateCredentials(certPath, keyPath)
+	if err != nil {
+		t.Fatalf("Expected LoadOrGenerateCredentials to succeed by regenerating credentials, got: %v", err)
+	}
+	if info == nil || info.Fingerprint == "" {
+		t.Error("Expected valid CertificateInfo after regeneration")
+	}
+}
+
+func TestLoadOrGenerateCredentials_InMemory(t *testing.T) {
+	info, err := LoadOrGenerateCredentials("", "")
+	if err != nil {
+		t.Fatalf("LoadOrGenerateCredentials with empty paths failed: %v", err)
+	}
+	if info == nil || info.Fingerprint == "" {
+		t.Error("Expected valid CertificateInfo for in-memory credentials")
+	}
+}
+
+func TestLoadOrGenerateCredentials_DirectoryCreationError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "localsend-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a file where a directory would need to be created
+	conflictFilePath := filepath.Join(tempDir, "conflict")
+	if err := os.WriteFile(conflictFilePath, []byte("file"), 0600); err != nil {
+		t.Fatalf("Failed to create conflict file: %v", err)
+	}
+
+	certPath := filepath.Join(conflictFilePath, "sub", "cert.pem")
+	keyPath := filepath.Join(conflictFilePath, "sub", "key.pem")
+
+	_, err = LoadOrGenerateCredentials(certPath, keyPath)
+	if err == nil {
+		t.Error("Expected error when directory creation fails, got nil")
+	}
+}
