@@ -7,6 +7,51 @@ import (
 	"github.com/GennoBou/localsend/pkg/protocol"
 )
 
+func TestUploadSession_IsCompleted(t *testing.T) {
+	files := map[string]protocol.FileMetadata{
+		"file1": {ID: "file1", FileName: "test1.txt", Size: 100},
+		"file2": {ID: "file2", FileName: "test2.txt", Size: 200},
+		"file3": {ID: "file3", FileName: "empty.txt", Size: 0},
+	}
+
+	sess := NewUploadSession("127.0.0.1", true, files)
+
+	// Initially not completed
+	if sess.IsCompleted() {
+		t.Errorf("Expected IsCompleted to be false initially")
+	}
+
+	// Partially complete file1
+	sess.UpdateProgress("file1", 50)
+	if sess.IsCompleted() {
+		t.Errorf("Expected IsCompleted to be false when file1 is partial")
+	}
+
+	// Fully complete file1
+	sess.UpdateProgress("file1", 100)
+	if sess.IsCompleted() {
+		t.Errorf("Expected IsCompleted to be false when only file1 is completed")
+	}
+
+	// Over-complete file1
+	sess.UpdateProgress("file1", 150)
+	if sess.IsCompleted() {
+		t.Errorf("Expected IsCompleted to be false when file1 is over-completed")
+	}
+
+	// Fully complete file2
+	sess.UpdateProgress("file2", 200)
+	if !sess.IsCompleted() {
+		t.Errorf("Expected IsCompleted to be true when all files (including 0-byte file3) are completed")
+	}
+
+	// Reduce progress of file1 below size
+	sess.UpdateProgress("file1", 80)
+	if sess.IsCompleted() {
+		t.Errorf("Expected IsCompleted to be false after file1 progress dropped below size")
+	}
+}
+
 func TestSessionManager(t *testing.T) {
 	// テスト用に短いタイムアウト（50ms）を設定
 	mgr := NewSessionManager(50 * time.Millisecond)

@@ -18,6 +18,7 @@ type UploadSession struct {
 	Files          map[string]string                // fileID -> token
 	FilesMetadata  map[string]protocol.FileMetadata // fileID -> Metadata
 	Progress       map[string]int64                 // fileID -> transferred bytes
+	completedFiles map[string]bool                 // fileID -> completed flag
 	mu             sync.RWMutex
 }
 
@@ -25,11 +26,15 @@ type UploadSession struct {
 func NewUploadSession(clientIP string, clientVerified bool, filesMetadata map[string]protocol.FileMetadata) *UploadSession {
 	files := make(map[string]string)
 	progress := make(map[string]int64)
+	completedFiles := make(map[string]bool)
 
-	for id := range filesMetadata {
+	for id, meta := range filesMetadata {
 		// Generate upload token for each file with UUID
 		files[id] = uuid.NewString()
 		progress[id] = 0
+		if meta.Size == 0 {
+			completedFiles[id] = true
+		}
 	}
 
 	return &UploadSession{
@@ -40,6 +45,7 @@ func NewUploadSession(clientIP string, clientVerified bool, filesMetadata map[st
 		Files:          files,
 		FilesMetadata:  filesMetadata,
 		Progress:       progress,
+		completedFiles: completedFiles,
 	}
 }
 
@@ -56,6 +62,11 @@ func (s *UploadSession) UpdateProgress(fileID string, bytes int64) {
 	defer s.mu.Unlock()
 	if _, ok := s.Progress[fileID]; ok {
 		s.Progress[fileID] = bytes
+		if meta, metaOk := s.FilesMetadata[fileID]; metaOk && bytes >= meta.Size {
+			s.completedFiles[fileID] = true
+		} else {
+			delete(s.completedFiles, fileID)
+		}
 	}
 	s.LastAccess = time.Now()
 }
@@ -174,11 +185,5 @@ func (s *UploadSession) IsCompleted() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for id, meta := range s.FilesMetadata {
-		progress, ok := s.Progress[id]
-		if !ok || progress < meta.Size {
-			return false
-		}
-	}
-	return true
+	return len(s.completedFiles) == len(s.FilesMetadata)
 }
