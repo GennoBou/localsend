@@ -55,6 +55,24 @@ func TestI18nFallback(t *testing.T) {
 	}
 }
 
+func TestI18nTemplateErrorHandling(t *testing.T) {
+	SetLanguage("en")
+
+	// Test template parsing error (unclosed action)
+	invalidParseKey := "Hello {{.Name"
+	msg := T(invalidParseKey, map[string]interface{}{"Name": "World"})
+	if msg != invalidParseKey {
+		t.Errorf("Expected '%s' on parse error, got '%s'", invalidParseKey, msg)
+	}
+
+	// Test template execution error (field evaluation failure)
+	invalidExecKey := "Hello {{.Foo.Bar}}"
+	msg = T(invalidExecKey, map[string]interface{}{"Foo": "not_a_map_or_struct"})
+	if msg != invalidExecKey {
+		t.Errorf("Expected '%s' on execution error, got '%s'", invalidExecKey, msg)
+	}
+}
+
 func TestDetectLanguage(t *testing.T) {
 	detectLanguage()
 	lang := GetLanguage()
