@@ -6,6 +6,52 @@ import (
 	"testing"
 )
 
+func TestCalculateFingerprint(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []byte
+		expected string
+	}{
+		{
+			name:     "Empty input",
+			input:    []byte{},
+			expected: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		},
+		{
+			name:     "Known string input",
+			input:    []byte("hello world"),
+			expected: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CalculateFingerprint(tt.input)
+			if got != tt.expected {
+				t.Errorf("CalculateFingerprint() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+
+	t.Run("Certificate DER bytes", func(t *testing.T) {
+		tlsCert, _, _, _, err := GenerateSelfSignedCert()
+		if err != nil {
+			t.Fatalf("Failed to generate cert: %v", err)
+		}
+
+		if len(tlsCert.Certificate) == 0 {
+			t.Fatal("TLS cert has no raw certificate bytes")
+		}
+
+		der := tlsCert.Certificate[0]
+		got := CalculateFingerprint(der)
+
+		if len(got) != 64 {
+			t.Errorf("Expected fingerprint length 64, got %d", len(got))
+		}
+	})
+}
+
 func TestGenerateSelfSignedCert(t *testing.T) {
 	tlsCert, parsedCert, certPEM, keyPEM, err := GenerateSelfSignedCert()
 	if err != nil {
