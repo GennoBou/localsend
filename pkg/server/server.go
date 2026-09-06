@@ -18,10 +18,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/GennoBou/localsend/pkg/crypto"
 	"github.com/GennoBou/localsend/pkg/protocol"
 	"github.com/GennoBou/localsend/pkg/session"
+	"github.com/google/uuid"
 )
 
 // ShareFile defines a file to be shared in reverse file transfer (Download API).
@@ -174,69 +174,39 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.writeInfo(w)
 }
 
-// handlePrepareUpload handles the POST /api/localsend/v2/prepare-upload endpoint.
-func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+// validatePIN checks whether the PIN provided in the request query matches the server's configured PIN.
+func (s *Server) validatePIN(r *http.Request) bool {
+	if s.pin == "" {
+		return true
 	}
+	return r.URL.Query().Get("pin") == s.pin
+}
 
-	// 1. PIN validation
-	if s.pin != "" {
-		reqPin := r.URL.Query().Get("pin")
-		if reqPin != s.pin {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
+// isDuplicateFile checks whether a file already exists in the save directory with matching size.
+func (s *Server) isDuplicateFile(f protocol.FileMetadata) bool {
+	targetPath := filepath.Join(s.saveDir, f.FileName)
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		return false
+	}
+	return info.Size() == f.Size
+}
+
+// areAllFilesDuplicate checks whether all files requested for upload already exist in the save directory.
+func (s *Server) areAllFilesDuplicate(files map[string]protocol.FileMetadata) bool {
+	if len(files) == 0 {
+		return false
+	}
+	for _, f := range files {
+		if !s.isDuplicateFile(f) {
+			return false
 		}
 	}
+	return true
+}
 
-	// 2. Client certificate hash validation
-	clientFingerprint, hasCert := s.checkClientCertificate(r)
-	if s.strictTLS {
-		if !hasCert {
-			http.Error(w, "Client certificate required", http.StatusForbidden)
-			return
-		}
-	}
-
-	var req protocol.PrepareUploadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	// Check if it matches the registered fingerprint during prepare-upload
-
-	// 2.5 Check for duplicate files (204 No Content).
-	// Verify if all files already exist in the save directory (same name and size)
-	allDuplicate := true
-	for _, f := range req.Files {
-		targetPath := filepath.Join(s.saveDir, f.FileName)
-		info, err := os.Stat(targetPath)
-		if err != nil {
-			allDuplicate = false
-			break
-		}
-		if info.Size() != f.Size {
-			allDuplicate = false
-			break
-		}
-	}
-	if len(req.Files) > 0 && allDuplicate {
-		w.WriteHeader(http.StatusNoContent) // 204 No Content (ファイル転送不要)
-		return
-	}
-
-	// 3. Check if other sessions are busy
-	if s.sessionMgr.IsBusy() {
-		w.WriteHeader(http.StatusConflict) // 409 Conflict (Busy)
-		return
-	}
-
-	// 4. Confirm acceptance of reception (callback)
-	senderIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-	req.Info.IP = senderIP
-
+// filterAcceptedFiles invokes the OnPrepareUpload callback (if set) and filters request files to accepted ones.
+func (s *Server) filterAcceptedFiles(req *protocol.PrepareUploadRequest) map[string]protocol.FileMetadata {
 	var filesList []protocol.FileMetadata
 	for _, f := range req.Files {
 		filesList = append(filesList, f)
@@ -248,28 +218,68 @@ func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !accepted {
-		w.WriteHeader(http.StatusForbidden) // 403 Forbidden
-		return
+		return nil
 	}
 
-	// Filter to only accepted files
 	filteredFiles := make(map[string]protocol.FileMetadata)
 	for id, f := range req.Files {
 		if acceptedFiles == nil || acceptedFiles[id] {
 			filteredFiles[id] = f
 		}
 	}
+	return filteredFiles
+}
 
-	// Return 403 Forbidden if none are accepted
+// handlePrepareUpload handles the POST /api/localsend/v2/prepare-upload endpoint.
+func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 1. PIN validation
+	if !s.validatePIN(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Client certificate hash validation
+	clientFingerprint, hasCert := s.checkClientCertificate(r)
+	if s.strictTLS && !hasCert {
+		http.Error(w, "Client certificate required", http.StatusForbidden)
+		return
+	}
+
+	var req protocol.PrepareUploadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	// 3. Check for duplicate files (204 No Content)
+	if s.areAllFilesDuplicate(req.Files) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// 4. Check if other sessions are busy
+	if s.sessionMgr.IsBusy() {
+		w.WriteHeader(http.StatusConflict)
+		return
+	}
+
+	// 5. Confirm acceptance of reception (callback)
+	senderIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	req.Info.IP = senderIP
+
+	filteredFiles := s.filterAcceptedFiles(&req)
 	if len(filteredFiles) == 0 {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
-	// 5. Session creation
-	// Check if certificate validation succeeded
+	// 6. Session creation
 	clientVerified := hasCert && (req.Info.Fingerprint == clientFingerprint)
-
 	sessionObj := s.sessionMgr.CreateSession(senderIP, clientVerified, filteredFiles)
 
 	resp := protocol.PrepareUploadResponse{

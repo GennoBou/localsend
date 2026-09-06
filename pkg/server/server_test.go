@@ -195,7 +195,7 @@ func TestWebShare_Download_Success(t *testing.T) {
 	if !strings.Contains(contentDisp, "filename*=UTF-8''") {
 		t.Errorf("expected Content-Disposition to use UTF-8 RFC 5987, got %s", contentDisp)
 	}
-	
+
 	// UTF-8'' の後のエンコード部分をデコードして期待通りか検証
 	parts := strings.Split(contentDisp, "filename*=UTF-8''")
 	if len(parts) < 2 {
@@ -573,5 +573,66 @@ func TestHandleUpload_ChecksumValidation(t *testing.T) {
 				t.Errorf("expected file %s to be deleted on failure, but it exists", savedFile)
 			}
 		})
+	}
+}
+
+// TestPrepareUpload_PINValidation tests PIN code validation in handlePrepareUpload.
+func TestPrepareUpload_PINValidation(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	s.pin = "123456"
+
+	files := map[string]protocol.FileMetadata{
+		"f1": {ID: "f1", FileName: "sample.txt", Size: 10},
+	}
+	reqBody := protocol.PrepareUploadRequest{
+		Info:  s.myDevice,
+		Files: files,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	// 1. Invalid PIN -> 401 Unauthorized
+	reqBad := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/prepare-upload?pin=wrong", strings.NewReader(string(bodyBytes)))
+	wBad := httptest.NewRecorder()
+	s.handlePrepareUpload(wBad, reqBad)
+	if wBad.Result().StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected status 401 Unauthorized for bad PIN, got %d", wBad.Result().StatusCode)
+	}
+
+	// 2. Correct PIN -> 200 OK
+	reqOK := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/prepare-upload?pin=123456", strings.NewReader(string(bodyBytes)))
+	wOK := httptest.NewRecorder()
+	s.handlePrepareUpload(wOK, reqOK)
+	if wOK.Result().StatusCode != http.StatusOK {
+		t.Errorf("expected status 200 OK for correct PIN, got %d", wOK.Result().StatusCode)
+	}
+}
+
+// TestPrepareUpload_RejectedAllFiles tests when all files are rejected in OnPrepareUpload callback.
+func TestPrepareUpload_RejectedAllFiles(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	s.OnPrepareUpload = func(sender protocol.Device, files []protocol.FileMetadata) (map[string]bool, bool) {
+		return nil, false // Callback declines the request
+	}
+
+	files := map[string]protocol.FileMetadata{
+		"f1": {ID: "f1", FileName: "sample.txt", Size: 10},
+	}
+	reqBody := protocol.PrepareUploadRequest{
+		Info:  s.myDevice,
+		Files: files,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/prepare-upload", strings.NewReader(string(bodyBytes)))
+	w := httptest.NewRecorder()
+
+	s.handlePrepareUpload(w, req)
+
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Errorf("expected status 403 Forbidden when callback declines upload, got %d", w.Result().StatusCode)
 	}
 }
