@@ -268,17 +268,7 @@ var receiveCmd = &cobra.Command{
 		onAnnounce := func(dev protocol.Device) {
 			logDebug("Announce received (registration request): %s (%s) - %s://%s:%d", dev.Alias, dev.DeviceModel, dev.Protocol, dev.IP, dev.Port)
 			go func() {
-				cli, err := client.NewClient(myDevice, &tlsCert, "", true, "")
-				if err != nil {
-					logDebug("登録用クライアントの初期化失敗: %v", err)
-					return
-				}
-				partner, err := cli.Register(ctx, &dev)
-				if err != nil {
-					logDebug("%s への HTTP 登録（対向登録）リクエスト失敗: %v", dev.IP, err)
-				} else {
-					logDebug("HTTP 登録成功: %s に登録されました (相手別名: %s)", dev.IP, partner.Alias)
-				}
+				_, _ = handleAnnounce(ctx, myDevice, &tlsCert, dev)
 			}()
 		}
 
@@ -648,4 +638,20 @@ func computeFileSha256(filePath string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// handleAnnounce attempts to register back with a discovered device upon receiving an announce signal.
+func handleAnnounce(ctx context.Context, myDevice protocol.Device, tlsCert *tls.Certificate, dev protocol.Device) (*protocol.Device, error) {
+	cli, err := client.NewClient(myDevice, tlsCert, "", true, "")
+	if err != nil {
+		logDebug("登録用クライアントの初期化失敗: %v", err)
+		return nil, fmt.Errorf("failed to initialize registration client: %w", err)
+	}
+	partner, err := cli.Register(ctx, &dev)
+	if err != nil {
+		logDebug("%s への HTTP 登録（対向登録）リクエスト失敗: %v", dev.IP, err)
+		return nil, fmt.Errorf("registration request to %s failed: %w", dev.IP, err)
+	}
+	logDebug("HTTP 登録成功: %s に登録されました (相手別名: %s)", dev.IP, partner.Alias)
+	return partner, nil
 }
