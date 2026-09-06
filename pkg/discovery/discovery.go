@@ -294,14 +294,14 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 
 // scanHost performs device discovery by sending a registration request to a specific IP and port.
 func scanHost(ctx context.Context, client *http.Client, myDevice protocol.Device, ip string, port int, onDiscover func(protocol.Device)) {
+	reqBody, err := json.Marshal(myDevice)
+	if err != nil {
+		return
+	}
+
 	protocols := []string{"https", "http"}
 	for _, proto := range protocols {
 		url := fmt.Sprintf("%s://%s:%d/api/localsend/v2/register", proto, ip, port)
-
-		reqBody, err := json.Marshal(myDevice)
-		if err != nil {
-			return
-		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(reqBody)))
 		if err != nil {
