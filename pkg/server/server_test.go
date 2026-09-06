@@ -575,3 +575,51 @@ func TestHandleUpload_ChecksumValidation(t *testing.T) {
 		})
 	}
 }
+
+// TestNewServer tests the initialization of Server struct by NewServer.
+func TestNewServer(t *testing.T) {
+	tlsCert, _, _, _, err := crypto.GenerateSelfSignedCert()
+	if err != nil {
+		t.Fatalf("failed to generate TLS cert: %v", err)
+	}
+
+	myDevice := protocol.Device{
+		Alias:       "Test Server Device",
+		DeviceModel: "TestModel",
+		DeviceType:  "desktop",
+		Fingerprint: "test-fingerprint-123",
+		Port:        53317,
+		Protocol:    "https",
+		Download:    true,
+	}
+
+	saveDir := "/tmp/test-savedir"
+	pin := "123456"
+	strictTLS := true
+
+	srv := NewServer(myDevice, tlsCert, saveDir, pin, strictTLS)
+
+	if srv == nil {
+		t.Fatal("expected NewServer to return non-nil Server instance")
+	}
+
+	if srv.myDevice.Alias != myDevice.Alias || srv.myDevice.Fingerprint != myDevice.Fingerprint {
+		t.Errorf("expected myDevice %v, got %v", myDevice, srv.myDevice)
+	}
+
+	if srv.saveDir != saveDir {
+		t.Errorf("expected saveDir %s, got %s", saveDir, srv.saveDir)
+	}
+
+	if srv.pin != pin {
+		t.Errorf("expected pin %s, got %s", pin, srv.pin)
+	}
+
+	if srv.strictTLS != strictTLS {
+		t.Errorf("expected strictTLS %v, got %v", strictTLS, srv.strictTLS)
+	}
+
+	if srv.sessionMgr == nil {
+		t.Error("expected sessionMgr to be initialized, got nil")
+	}
+}
