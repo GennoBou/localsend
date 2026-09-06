@@ -18,10 +18,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/GennoBou/localsend/pkg/crypto"
 	"github.com/GennoBou/localsend/pkg/protocol"
 	"github.com/GennoBou/localsend/pkg/session"
+	"github.com/google/uuid"
 )
 
 // ShareFile defines a file to be shared in reverse file transfer (Download API).
@@ -281,61 +281,55 @@ func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// handleUpload handles the POST /api/localsend/v2/upload endpoint.
-func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+// validateUploadRequest validates session, tokens, client IP, and TLS certificate for an upload request.
+func (s *Server) validateUploadRequest(r *http.Request) (*session.UploadSession, protocol.FileMetadata, int, string) {
 	sessionID := r.URL.Query().Get("sessionId")
 	fileID := r.URL.Query().Get("fileId")
 	token := r.URL.Query().Get("token")
 
 	sessionObj, ok := s.sessionMgr.GetSession(sessionID)
 	if !ok {
-		http.Error(w, "Session not found", http.StatusBadRequest)
-		return
+		return nil, protocol.FileMetadata{}, http.StatusBadRequest, "Session not found"
 	}
 
 	expectedToken, fileMeta, exists := sessionObj.GetFileTokenAndMeta(fileID)
 	clientIP, clientVerified := sessionObj.GetClientInfo()
 
 	if !exists || expectedToken != token {
-		http.Error(w, "Invalid token or fileId", http.StatusBadRequest)
-		return
+		return nil, protocol.FileMetadata{}, http.StatusBadRequest, "Invalid token or fileId"
 	}
 
 	// Verify the client's IP address
 	remoteIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if remoteIP != clientIP {
-		http.Error(w, "IP address mismatch", http.StatusForbidden)
-		return
+		return nil, protocol.FileMetadata{}, http.StatusForbidden, "IP address mismatch"
 	}
 
 	// Re-validate the certificate hash if strictTLS is enabled
 	if s.strictTLS {
 		_, hasCert := s.checkClientCertificate(r)
 		if !hasCert || !clientVerified {
-			http.Error(w, "TLS connection untrusted", http.StatusForbidden)
-			return
+			return nil, protocol.FileMetadata{}, http.StatusForbidden, "TLS connection untrusted"
 		}
-		// Check if it matches the registered fingerprint during prepare-upload
-		if fileMeta.ID == "" { // 無効チェック
-			http.Error(w, "Internal error", http.StatusInternalServerError)
-			return
+		if fileMeta.ID == "" {
+			return nil, protocol.FileMetadata{}, http.StatusInternalServerError, "Internal error"
 		}
-		// Ideally compared with the fingerprint recorded in sessionObj.
-		// Here clientVerified flag indicates it is already verified.
 	}
+
+	return sessionObj, fileMeta, http.StatusOK, ""
+}
+
+// saveUploadedFile reads data from the reader, writes to disk, monitors progress, and verifies checksum.
+func (s *Server) saveUploadedFile(sessionObj *session.UploadSession, fileMeta protocol.FileMetadata, body io.Reader) (string, int, string) {
+	sessionID := sessionObj.ID
+	fileID := fileMeta.ID
 
 	// Determine a unique save path to avoid conflicts
 	savedPath := getUniquePath(s.saveDir, fileMeta.FileName)
 
 	file, err := os.Create(savedPath)
 	if err != nil {
-		http.Error(w, "Failed to create file", http.StatusInternalServerError)
-		return
+		return "", http.StatusInternalServerError, "Failed to create file"
 	}
 	defer file.Close()
 
@@ -351,11 +345,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.sessionMgr.GetSession(sessionID); !ok {
 			file.Close()
 			_ = os.Remove(savedPath)
-			http.Error(w, "Upload canceled", http.StatusBadRequest)
-			return
+			return "", http.StatusBadRequest, "Upload canceled"
 		}
 
-		nr, er := r.Body.Read(buffer)
+		nr, er := body.Read(buffer)
 		if nr > 0 {
 			nw, ew := writer.Write(buffer[:nr])
 			if nw > 0 {
@@ -366,20 +359,17 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if ew != nil {
-				http.Error(w, "Write error", http.StatusInternalServerError)
-				return
+				return "", http.StatusInternalServerError, "Write error"
 			}
 			if nr != nw {
-				http.Error(w, "Short write", http.StatusInternalServerError)
-				return
+				return "", http.StatusInternalServerError, "Short write"
 			}
 		}
 		if er != nil {
 			if er == io.EOF {
 				break
 			}
-			http.Error(w, "Read error", http.StatusInternalServerError)
-			return
+			return "", http.StatusInternalServerError, "Read error"
 		}
 	}
 
@@ -389,18 +379,39 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		if !strings.EqualFold(calculatedHash, fileMeta.Sha256) {
 			file.Close()
 			_ = os.Remove(savedPath)
-			http.Error(w, "Checksum mismatch", http.StatusUnprocessableEntity)
-			return
+			return "", http.StatusUnprocessableEntity, "Checksum mismatch"
 		}
 	}
 
+	return savedPath, http.StatusOK, ""
+}
+
+// handleUpload handles the POST /api/localsend/v2/upload endpoint.
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionObj, fileMeta, status, errMsg := s.validateUploadRequest(r)
+	if status != http.StatusOK {
+		http.Error(w, errMsg, status)
+		return
+	}
+
+	savedPath, status, errMsg := s.saveUploadedFile(sessionObj, fileMeta, r.Body)
+	if status != http.StatusOK {
+		http.Error(w, errMsg, status)
+		return
+	}
+
 	if s.OnDone != nil {
-		s.OnDone(sessionID, fileID, savedPath)
+		s.OnDone(sessionObj.ID, fileMeta.ID, savedPath)
 	}
 
 	// Release the session if transfer for all files in the session is completed
 	if sessionObj.IsCompleted() {
-		s.sessionMgr.DeleteSession(sessionID)
+		s.sessionMgr.DeleteSession(sessionObj.ID)
 	}
 
 	w.WriteHeader(http.StatusOK)
