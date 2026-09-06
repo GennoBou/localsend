@@ -232,3 +232,237 @@ func TestClient_SendText(t *testing.T) {
 		t.Errorf("expected server to receive preview %q, got %q", textMessage, receivedFileMeta.Preview)
 	}
 }
+
+func TestClient_SendFiles_Errors(t *testing.T) {
+	testContent := "sample data"
+	files := []SendFileSource{
+		{
+			ID:       "file-err-1",
+			FileName: "sample.txt",
+			Size:     int64(len(testContent)),
+			FileType: "text/plain",
+			Open: func() (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader(testContent)), nil
+			},
+		},
+	}
+
+	t.Run("401 Unauthorized returns ErrInvalidPIN", func(t *testing.T) {
+		server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+		defer server.Close()
+
+		_, err := client.SendFiles(context.Background(), target, files, "wrong-pin", nil)
+		if !errors.Is(err, protocol.ErrInvalidPIN) {
+			t.Errorf("expected ErrInvalidPIN, got %v", err)
+		}
+	})
+
+	t.Run("403 Forbidden returns ErrRejected", func(t *testing.T) {
+		server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		})
+		defer server.Close()
+
+		_, err := client.SendFiles(context.Background(), target, files, "", nil)
+		if !errors.Is(err, protocol.ErrRejected) {
+			t.Errorf("expected ErrRejected, got %v", err)
+		}
+	})
+
+	t.Run("409 Conflict returns ErrSessionBusy", func(t *testing.T) {
+		server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusConflict)
+		})
+		defer server.Close()
+
+		_, err := client.SendFiles(context.Background(), target, files, "", nil)
+		if !errors.Is(err, protocol.ErrSessionBusy) {
+			t.Errorf("expected ErrSessionBusy, got %v", err)
+		}
+	})
+
+	t.Run("204 No Content returns success without uploading", func(t *testing.T) {
+		uploaded := false
+		server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/localsend/v2/prepare-upload" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			uploaded = true
+		})
+		defer server.Close()
+
+		results, err := client.SendFiles(context.Background(), target, files, "", nil)
+		if err != nil {
+			t.Fatalf("expected nil error on 204 No Content, got %v", err)
+		}
+		if len(results) != 1 || results[0].Err != nil {
+			t.Errorf("expected 1 success result on 204 No Content, got %+v", results)
+		}
+		if uploaded {
+			t.Errorf("upload should not be called when prepare returned 204 No Content")
+		}
+	})
+
+	t.Run("Context canceled aborts upload", func(t *testing.T) {
+		server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/localsend/v2/prepare-upload" {
+				resp := protocol.PrepareUploadResponse{
+					SessionID: "ctx-session",
+					Files:     map[string]string{"file-err-1": "token-1"},
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+			if r.URL.Path == "/api/localsend/v2/upload" {
+				// Block until client disconnects
+				<-r.Context().Done()
+				return
+			}
+			if r.URL.Path == "/api/localsend/v2/cancel" {
+				w.WriteHeader(http.StatusOK)
+			}
+		})
+		defer server.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+
+		_, err := client.SendFiles(ctx, target, files, "", nil)
+		if err == nil {
+			t.Fatal("expected error on canceled context, got nil")
+		}
+	})
+}
+
+func TestClient_SendFiles_Progress(t *testing.T) {
+	sessionID := "progress-session"
+	fileID := "prog-file-1"
+	token := "prog-token-1"
+
+	server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/localsend/v2/prepare-upload":
+			resp := protocol.PrepareUploadResponse{
+				SessionID: sessionID,
+				Files:     map[string]string{fileID: token},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/api/localsend/v2/upload":
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	defer server.Close()
+
+	testContent := "01234567890123456789" // 20 bytes
+	files := []SendFileSource{
+		{
+			ID:       fileID,
+			FileName: "prog.txt",
+			Size:     int64(len(testContent)),
+			FileType: "text/plain",
+			Open: func() (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader(testContent)), nil
+			},
+		},
+	}
+
+	var totalProgressBytes int64
+	onProgress := func(id string, sentBytes int64) {
+		if id == fileID {
+			totalProgressBytes = sentBytes
+		}
+	}
+
+	results, err := client.SendFiles(context.Background(), target, files, "", onProgress)
+	if err != nil {
+		t.Fatalf("expected send success, got %v", err)
+	}
+	if len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("expected successful send result, got %+v", results)
+	}
+	if totalProgressBytes != int64(len(testContent)) {
+		t.Errorf("expected totalProgressBytes = %d, got %d", len(testContent), totalProgressBytes)
+	}
+}
+
+func TestClient_Register(t *testing.T) {
+	expectedPeer := protocol.Device{
+		Alias:       "RemoteTarget",
+		Version:     "2.0",
+		DeviceModel: "RemoteModel",
+		DeviceType:  protocol.DeviceTypeDesktop,
+		Fingerprint: "remote-fp",
+		Port:        53317,
+		Protocol:    "http",
+	}
+
+	t.Run("Successful registration", func(t *testing.T) {
+		server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/localsend/v2/register" && r.Method == http.MethodPost {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(expectedPeer)
+				return
+			}
+			http.NotFound(w, r)
+		})
+		defer server.Close()
+
+		peer, err := client.Register(context.Background(), target)
+		if err != nil {
+			t.Fatalf("expected registration success, got %v", err)
+		}
+		if peer.Alias != expectedPeer.Alias {
+			t.Errorf("peer.Alias = %q, want %q", peer.Alias, expectedPeer.Alias)
+		}
+		if peer.IP != target.IP {
+			t.Errorf("peer.IP = %q, want %q", peer.IP, target.IP)
+		}
+	})
+
+	t.Run("Registration error status", func(t *testing.T) {
+		server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		})
+		defer server.Close()
+
+		_, err := client.Register(context.Background(), target)
+		if err == nil {
+			t.Fatal("expected error on 500 status, got nil")
+		}
+	})
+}
+
+func TestClient_NewClient_Options(t *testing.T) {
+	myDev := protocol.Device{Alias: "Me"}
+
+	t.Run("Valid proxy URL", func(t *testing.T) {
+		c, err := NewClient(myDev, nil, "http://127.0.0.1:8080", true, "")
+		if err != nil {
+			t.Fatalf("expected success, got %v", err)
+		}
+		if c == nil {
+			t.Fatal("expected non-nil Client")
+		}
+	})
+
+	t.Run("Invalid proxy URL", func(t *testing.T) {
+		_, err := NewClient(myDev, nil, "http://invalid-url-with-control-char\x7f", true, "")
+		if err == nil {
+			t.Fatal("expected error for invalid proxy URL, got nil")
+		}
+	})
+
+	t.Run("Non-existent CA file", func(t *testing.T) {
+		_, err := NewClient(myDev, nil, "", false, "non_existent_ca_cert.pem")
+		if err == nil {
+			t.Fatal("expected error for non-existent CA file, got nil")
+		}
+	})
+}
+
