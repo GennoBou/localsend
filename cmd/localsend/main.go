@@ -335,7 +335,12 @@ var sendCmd = &cobra.Command{
 			files = append(files, client.NewTextSendSource(textMsg))
 		}
 
-		for _, arg := range args {
+		type fileInfo struct {
+			path string
+			info os.FileInfo
+		}
+		fileInfos := make([]fileInfo, len(args))
+		for i, arg := range args {
 			info, err := os.Stat(arg)
 			if err != nil {
 				fmt.Printf("File not found: %s\n", arg)
@@ -345,24 +350,35 @@ var sendCmd = &cobra.Command{
 				fmt.Printf("Directories are not supported directly yet: %s\n", arg)
 				os.Exit(1)
 			}
-
-			filePath := arg
-			hashStr, err := computeFileSha256(filePath)
-			if err != nil {
-				logDebug("Failed to compute sha256 for %s: %v", filePath, err)
-			}
-
-			files = append(files, client.SendFileSource{
-				ID:       uuid.NewString(),
-				FileName: filepath.Base(filePath),
-				Size:     info.Size(),
-				FileType: "application/octet-stream",
-				Sha256:   hashStr,
-				Open: func() (io.ReadCloser, error) {
-					return os.Open(filePath)
-				},
-			})
+			fileInfos[i] = fileInfo{path: arg, info: info}
 		}
+
+		fileSources := make([]client.SendFileSource, len(args))
+		var wg sync.WaitGroup
+		wg.Add(len(args))
+		for i, fi := range fileInfos {
+			go func(idx int, path string, info os.FileInfo) {
+				defer wg.Done()
+				hashStr, err := computeFileSha256(path)
+				if err != nil {
+					logDebug("Failed to compute sha256 for %s: %v", path, err)
+				}
+				filePath := path
+				fileSources[idx] = client.SendFileSource{
+					ID:       uuid.NewString(),
+					FileName: filepath.Base(filePath),
+					Size:     info.Size(),
+					FileType: "application/octet-stream",
+					Sha256:   hashStr,
+					Open: func() (io.ReadCloser, error) {
+						return os.Open(filePath)
+					},
+				}
+			}(i, fi.path, fi.info)
+		}
+		wg.Wait()
+
+		files = append(files, fileSources...)
 
 		// Port 0 because we do not listen
 		myDevice := protocol.GetDefaultDevice(0, "https", false)
