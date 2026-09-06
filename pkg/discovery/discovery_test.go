@@ -277,7 +277,14 @@ func TestScanHost(t *testing.T) {
 	}
 
 	client := server.Client()
-	scanHost(ctx, client, myDevice, host, port, onDiscover)
+	scanHost(ScanConfig{
+		Ctx:        ctx,
+		Client:     client,
+		MyDevice:   myDevice,
+		IP:         host,
+		Port:       port,
+		OnDiscover: onDiscover,
+	})
 
 	discoveredMu.Lock()
 	defer discoveredMu.Unlock()

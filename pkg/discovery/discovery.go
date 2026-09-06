@@ -257,7 +257,14 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 					<-sem
 					wg.Done()
 				}()
-				scanHost(ctx, client, myDevice, targetIP, targetPort, onDiscover)
+				scanHost(ScanConfig{
+					Ctx:        ctx,
+					Client:     client,
+					MyDevice:   myDevice,
+					IP:         targetIP,
+					Port:       targetPort,
+					OnDiscover: onDiscover,
+				})
 			}(ip, port)
 		}
 	}
@@ -285,7 +292,14 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 					<-sem
 					wg.Done()
 				}()
-				scanHost(ctx, client, myDevice, ip, protocol.DefaultPort, onDiscover)
+				scanHost(ScanConfig{
+					Ctx:        ctx,
+					Client:     client,
+					MyDevice:   myDevice,
+					IP:         ip,
+					Port:       protocol.DefaultPort,
+					OnDiscover: onDiscover,
+				})
 			}(targetIP)
 		}
 	}
@@ -293,24 +307,34 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 	wg.Wait()
 }
 
+// ScanConfig holds the parameters for performing a host scan during legacy discovery.
+type ScanConfig struct {
+	Ctx        context.Context
+	Client     *http.Client
+	MyDevice   protocol.Device
+	IP         string
+	Port       int
+	OnDiscover func(protocol.Device)
+}
+
 // scanHost performs device discovery by sending a registration request to a specific IP and port.
-func scanHost(ctx context.Context, client *http.Client, myDevice protocol.Device, ip string, port int, onDiscover func(protocol.Device)) {
-	reqBody, err := json.Marshal(myDevice)
+func scanHost(cfg ScanConfig) {
+	reqBody, err := json.Marshal(cfg.MyDevice)
 	if err != nil {
 		return
 	}
 
 	protocols := []string{"https", "http"}
 	for _, proto := range protocols {
-		url := fmt.Sprintf("%s://%s:%d/api/localsend/v2/register", proto, ip, port)
+		url := fmt.Sprintf("%s://%s:%d/api/localsend/v2/register", proto, cfg.IP, cfg.Port)
 
-		req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(reqBody)))
+		req, err := http.NewRequestWithContext(cfg.Ctx, "POST", url, strings.NewReader(string(reqBody)))
 		if err != nil {
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		resp, err := client.Do(req)
+		resp, err := cfg.Client.Do(req)
 		if err != nil {
 			continue
 		}
@@ -320,10 +344,10 @@ func scanHost(ctx context.Context, client *http.Client, myDevice protocol.Device
 			err = json.NewDecoder(resp.Body).Decode(&partner)
 			resp.Body.Close()
 			if err == nil {
-				partner.IP = ip
+				partner.IP = cfg.IP
 				partner.Protocol = proto
-				partner.Port = port
-				onDiscover(partner)
+				partner.Port = cfg.Port
+				cfg.OnDiscover(partner)
 				break // Break the protocol loop as discovery succeeded
 			}
 		} else {
