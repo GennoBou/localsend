@@ -575,3 +575,53 @@ func TestHandleUpload_ChecksumValidation(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleUpload_PathTraversal prevents path traversal when saving uploaded files
+func TestHandleUpload_PathTraversal(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	// Malicious file name containing relative path traversal components
+	traversalFileName := "../../evil.txt"
+	expectedBaseName := "evil.txt"
+	content := "unauthorized payload"
+
+	meta := protocol.FileMetadata{
+		ID:       "traversal-file-id",
+		FileName: traversalFileName,
+		Size:     int64(len(content)),
+		FileType: "text/plain",
+	}
+	filesMeta := map[string]protocol.FileMetadata{meta.ID: meta}
+
+	sessionObj := s.sessionMgr.CreateSession("127.0.0.1", false, filesMeta)
+	token, _, _ := sessionObj.GetFileTokenAndMeta(meta.ID)
+
+	query := url.Values{}
+	query.Set("sessionId", sessionObj.ID)
+	query.Set("fileId", meta.ID)
+	query.Set("token", token)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/upload?"+query.Encode(), strings.NewReader(content))
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+
+	s.handleUpload(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %d", resp.StatusCode)
+	}
+
+	// Verify the file was NOT saved outside saveDir
+	outsidePath := filepath.Join(s.saveDir, traversalFileName)
+	if _, err := os.Stat(outsidePath); !os.IsNotExist(err) {
+		t.Errorf("path traversal file was created outside saveDir: %s", outsidePath)
+	}
+
+	// Verify the file WAS saved safely inside saveDir with filepath.Base
+	expectedPath := filepath.Join(s.saveDir, expectedBaseName)
+	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
+		t.Errorf("expected file to be saved safely inside saveDir at %s, but it was not found", expectedPath)
+	}
+}
