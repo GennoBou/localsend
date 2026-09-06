@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/GennoBou/localsend/pkg/protocol"
+	"github.com/google/uuid"
 )
 
 func TestSessionManager(t *testing.T) {
@@ -70,4 +71,90 @@ func TestSessionTimeout(t *testing.T) {
 	if mgr.IsBusy() {
 		t.Error("Manager should not be busy after session expires")
 	}
+}
+
+func TestNewUploadSession(t *testing.T) {
+	t.Run("with files metadata", func(t *testing.T) {
+		clientIP := "192.168.1.50"
+		clientVerified := true
+		filesMeta := map[string]protocol.FileMetadata{
+			"file1": {ID: "file1", FileName: "doc.pdf", Size: 2048},
+			"file2": {ID: "file2", FileName: "img.png", Size: 4096},
+		}
+
+		before := time.Now()
+		sess := NewUploadSession(clientIP, clientVerified, filesMeta)
+		after := time.Now()
+
+		if sess == nil {
+			t.Fatal("Expected non-nil UploadSession")
+		}
+
+		if _, err := uuid.Parse(sess.ID); err != nil {
+			t.Errorf("Expected valid UUID for session ID, got %q: %v", sess.ID, err)
+		}
+
+		if sess.ClientIP != clientIP {
+			t.Errorf("Expected ClientIP %q, got %q", clientIP, sess.ClientIP)
+		}
+
+		if sess.ClientVerified != clientVerified {
+			t.Errorf("Expected ClientVerified %v, got %v", clientVerified, sess.ClientVerified)
+		}
+
+		if sess.LastAccess.Before(before) || sess.LastAccess.After(after) {
+			t.Errorf("Expected LastAccess between %v and %v, got %v", before, after, sess.LastAccess)
+		}
+
+		if len(sess.FilesMetadata) != len(filesMeta) {
+			t.Errorf("Expected %d FilesMetadata entries, got %d", len(filesMeta), len(sess.FilesMetadata))
+		}
+
+		for id := range filesMeta {
+			token, ok := sess.Files[id]
+			if !ok {
+				t.Errorf("Expected file token for %q", id)
+			} else if _, err := uuid.Parse(token); err != nil {
+				t.Errorf("Expected valid UUID for file token %q, got %q: %v", id, token, err)
+			}
+
+			prog, ok := sess.Progress[id]
+			if !ok {
+				t.Errorf("Expected progress entry for %q", id)
+			} else if prog != 0 {
+				t.Errorf("Expected initial progress 0 for %q, got %d", id, prog)
+			}
+		}
+	})
+
+	t.Run("with empty files metadata", func(t *testing.T) {
+		clientIP := "10.0.0.1"
+		clientVerified := false
+		filesMeta := map[string]protocol.FileMetadata{}
+
+		sess := NewUploadSession(clientIP, clientVerified, filesMeta)
+		if sess == nil {
+			t.Fatal("Expected non-nil UploadSession")
+		}
+
+		if _, err := uuid.Parse(sess.ID); err != nil {
+			t.Errorf("Expected valid UUID for session ID, got %q: %v", sess.ID, err)
+		}
+
+		if sess.ClientIP != clientIP {
+			t.Errorf("Expected ClientIP %q, got %q", clientIP, sess.ClientIP)
+		}
+
+		if sess.ClientVerified != clientVerified {
+			t.Errorf("Expected ClientVerified %v, got %v", clientVerified, sess.ClientVerified)
+		}
+
+		if len(sess.Files) != 0 {
+			t.Errorf("Expected empty Files map, got len %d", len(sess.Files))
+		}
+
+		if len(sess.Progress) != 0 {
+			t.Errorf("Expected empty Progress map, got len %d", len(sess.Progress))
+		}
+	})
 }
