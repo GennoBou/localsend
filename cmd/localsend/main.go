@@ -567,13 +567,15 @@ var sendCmd = &cobra.Command{
 			"Alias": targetDevice.Alias,
 		}))
 
+		filesMap := make(map[string]client.SendFileSource, len(files))
+		for _, f := range files {
+			filesMap[f.ID] = f
+		}
+
 		progressFunc := func(fileID string, sentBytes int64) {
-			var fileMeta client.SendFileSource
-			for _, f := range files {
-				if f.ID == fileID {
-					fileMeta = f
-					break
-				}
+			fileMeta, ok := filesMap[fileID]
+			if !ok {
+				return
 			}
 			percent := float64(sentBytes) / float64(fileMeta.Size) * 100
 			fmt.Printf("\rProgress for %s: %.1f%% (%d/%d bytes)", fileMeta.FileName, percent, sentBytes, fileMeta.Size)
