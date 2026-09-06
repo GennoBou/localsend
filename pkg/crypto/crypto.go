@@ -10,10 +10,16 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
 	"time"
+)
+
+var (
+	randReader io.Reader = rand.Reader
+	rsaGenKey           = rsa.GenerateKey
 )
 
 // CertificateInfo holds the TLS certificate, the parsed x509 certificate, and its fingerprint.
@@ -26,13 +32,13 @@ type CertificateInfo struct {
 // GenerateSelfSignedCert generates a new RSA 2048-bit private key and a self-signed certificate valid for 10 years.
 // It returns the tls.Certificate, x509.Certificate, and their respective PEM-encoded bytes.
 func GenerateSelfSignedCert() (tls.Certificate, *x509.Certificate, []byte, []byte, error) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	priv, err := rsaGenKey(randReader, 2048)
 	if err != nil {
 		return tls.Certificate{}, nil, nil, nil, fmt.Errorf("failed to generate private key: %w", err)
 	}
 
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	serialNumber, err := rand.Int(randReader, serialNumberLimit)
 	if err != nil {
 		return tls.Certificate{}, nil, nil, nil, fmt.Errorf("failed to generate serial number: %w", err)
 	}
@@ -49,7 +55,7 @@ func GenerateSelfSignedCert() (tls.Certificate, *x509.Certificate, []byte, []byt
 		BasicConstraintsValid: true,
 	}
 
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	derBytes, err := x509.CreateCertificate(randReader, &template, &template, &priv.PublicKey, priv)
 	if err != nil {
 		return tls.Certificate{}, nil, nil, nil, fmt.Errorf("failed to create certificate: %w", err)
 	}
