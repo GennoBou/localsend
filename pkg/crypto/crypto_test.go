@@ -62,3 +62,84 @@ func TestLoadOrGenerateCredentials(t *testing.T) {
 		t.Errorf("Fingerprints mismatch. Expected same fingerprint from cached files. Expected: %s, Got: %s", info1.Fingerprint, info2.Fingerprint)
 	}
 }
+
+func TestLoadOrGenerateCredentials_InMemory(t *testing.T) {
+	// Empty certPath or keyPath generates credentials in memory without persisting
+	info, err := LoadOrGenerateCredentials("", "")
+	if err != nil {
+		t.Fatalf("LoadOrGenerateCredentials(\"\", \"\") failed: %v", err)
+	}
+	if info == nil || info.Fingerprint == "" {
+		t.Error("Expected valid CertificateInfo in in-memory mode")
+	}
+}
+
+func TestLoadOrGenerateCredentials_InvalidDir(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "localsend-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a file where directory should be
+	conflictFile := filepath.Join(tempDir, "file_blocking_dir")
+	if err := os.WriteFile(conflictFile, []byte("block"), 0600); err != nil {
+		t.Fatalf("Failed to create conflict file: %v", err)
+	}
+
+	certPath := filepath.Join(conflictFile, "cert.pem")
+	keyPath := filepath.Join(conflictFile, "key.pem")
+
+	_, err = LoadOrGenerateCredentials(certPath, keyPath)
+	if err == nil {
+		t.Error("Expected error when MkdirAll fails due to existing file blocking directory path")
+	}
+}
+
+func TestLoadOrGenerateCredentials_WriteFileError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "localsend-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Make certPath a directory so WriteFile fails
+	certDir := filepath.Join(tempDir, "cert.pem")
+	if err := os.Mkdir(certDir, 0700); err != nil {
+		t.Fatalf("Failed to create directory for certPath: %v", err)
+	}
+	keyPath := filepath.Join(tempDir, "key.pem")
+
+	_, err = LoadOrGenerateCredentials(certDir, keyPath)
+	if err == nil {
+		t.Error("Expected error when WriteFile fails on certPath")
+	}
+}
+
+func TestLoadOrGenerateCredentials_CorruptedFiles(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "localsend-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	certPath := filepath.Join(tempDir, "cert.pem")
+	keyPath := filepath.Join(tempDir, "key.pem")
+
+	// Write invalid/corrupted certificate and key content
+	if err := os.WriteFile(certPath, []byte("invalid cert"), 0600); err != nil {
+		t.Fatalf("Failed to write invalid cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("invalid key"), 0600); err != nil {
+		t.Fatalf("Failed to write invalid key: %v", err)
+	}
+
+	// Should fallback to generating new credentials and overwriting
+	info, err := LoadOrGenerateCredentials(certPath, keyPath)
+	if err != nil {
+		t.Fatalf("LoadOrGenerateCredentials failed on corrupted files fallback: %v", err)
+	}
+	if info == nil || info.Fingerprint == "" {
+		t.Error("Expected valid CertificateInfo after fallback generation")
+	}
+}
