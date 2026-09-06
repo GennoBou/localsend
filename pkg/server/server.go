@@ -174,6 +174,60 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.writeInfo(w)
 }
 
+// validatePIN checks whether the PIN provided in the request query matches the server's PIN.
+func (s *Server) validatePIN(r *http.Request) bool {
+	if s.pin == "" {
+		return true
+	}
+	return r.URL.Query().Get("pin") == s.pin
+}
+
+// areAllFilesDuplicate returns true if all requested files already exist in saveDir with matching file sizes.
+func (s *Server) areAllFilesDuplicate(files map[string]protocol.FileMetadata) bool {
+	if len(files) == 0 {
+		return false
+	}
+	for _, f := range files {
+		targetPath := filepath.Join(s.saveDir, f.FileName)
+		info, err := os.Stat(targetPath)
+		if err != nil || info.Size() != f.Size {
+			return false
+		}
+	}
+	return true
+}
+
+// filterAcceptedFiles executes the OnPrepareUpload callback if configured and filters the files accordingly.
+// Returns nil if no files are accepted or if reception is rejected.
+func (s *Server) filterAcceptedFiles(sender protocol.Device, files map[string]protocol.FileMetadata) map[string]protocol.FileMetadata {
+	var filesList []protocol.FileMetadata
+	for _, f := range files {
+		filesList = append(filesList, f)
+	}
+
+	acceptedFiles, accepted := map[string]bool(nil), true
+	if s.OnPrepareUpload != nil {
+		acceptedFiles, accepted = s.OnPrepareUpload(sender, filesList)
+	}
+
+	if !accepted {
+		return nil
+	}
+
+	filteredFiles := make(map[string]protocol.FileMetadata)
+	for id, f := range files {
+		if acceptedFiles == nil || acceptedFiles[id] {
+			filteredFiles[id] = f
+		}
+	}
+
+	if len(filteredFiles) == 0 {
+		return nil
+	}
+
+	return filteredFiles
+}
+
 // handlePrepareUpload handles the POST /api/localsend/v2/prepare-upload endpoint.
 func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -182,12 +236,9 @@ func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. PIN validation
-	if s.pin != "" {
-		reqPin := r.URL.Query().Get("pin")
-		if reqPin != s.pin {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
+	if !s.validatePIN(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
 	}
 
 	// 2. Client certificate hash validation
@@ -205,25 +256,9 @@ func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if it matches the registered fingerprint during prepare-upload
-
 	// 2.5 Check for duplicate files (204 No Content).
-	// Verify if all files already exist in the save directory (same name and size)
-	allDuplicate := true
-	for _, f := range req.Files {
-		targetPath := filepath.Join(s.saveDir, f.FileName)
-		info, err := os.Stat(targetPath)
-		if err != nil {
-			allDuplicate = false
-			break
-		}
-		if info.Size() != f.Size {
-			allDuplicate = false
-			break
-		}
-	}
-	if len(req.Files) > 0 && allDuplicate {
-		w.WriteHeader(http.StatusNoContent) // 204 No Content (ファイル転送不要)
+	if s.areAllFilesDuplicate(req.Files) {
+		w.WriteHeader(http.StatusNoContent) // 204 No Content
 		return
 	}
 
@@ -237,32 +272,9 @@ func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 	senderIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	req.Info.IP = senderIP
 
-	var filesList []protocol.FileMetadata
-	for _, f := range req.Files {
-		filesList = append(filesList, f)
-	}
-
-	acceptedFiles, accepted := map[string]bool(nil), true
-	if s.OnPrepareUpload != nil {
-		acceptedFiles, accepted = s.OnPrepareUpload(req.Info, filesList)
-	}
-
-	if !accepted {
+	filteredFiles := s.filterAcceptedFiles(req.Info, req.Files)
+	if filteredFiles == nil {
 		w.WriteHeader(http.StatusForbidden) // 403 Forbidden
-		return
-	}
-
-	// Filter to only accepted files
-	filteredFiles := make(map[string]protocol.FileMetadata)
-	for id, f := range req.Files {
-		if acceptedFiles == nil || acceptedFiles[id] {
-			filteredFiles[id] = f
-		}
-	}
-
-	// Return 403 Forbidden if none are accepted
-	if len(filteredFiles) == 0 {
-		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
