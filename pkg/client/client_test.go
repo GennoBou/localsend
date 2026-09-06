@@ -15,14 +15,49 @@ import (
 	"github.com/GennoBou/localsend/pkg/protocol"
 )
 
+func setupTestServerAndClient(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *protocol.Device, *Client) {
+	t.Helper()
+
+	server := httptest.NewServer(handler)
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		server.Close()
+		t.Fatalf("failed to parse server url: %v", err)
+	}
+	port, _ := strconv.Atoi(u.Port())
+
+	target := &protocol.Device{
+		Alias:       "TestReceiver",
+		Version:     "2.0",
+		DeviceModel: "Test",
+		DeviceType:  protocol.DeviceTypeDesktop,
+		Fingerprint: "",
+		Port:        port,
+		Protocol:    "http",
+		IP:          u.Hostname(),
+	}
+
+	client, err := NewClient(protocol.Device{
+		Alias:       "TestSender",
+		Version:     "2.0",
+		Fingerprint: "sender-fingerprint",
+	}, nil, "", false, "")
+	if err != nil {
+		server.Close()
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	return server, target, client
+}
+
 func TestClient_SendFiles_ChecksumMismatch(t *testing.T) {
 	var capturedSha256 string
 	sessionID := "test-session-id"
 	fileID := "file-1"
 	token := "file-token-1"
 
-	// Mock server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/localsend/v2/prepare-upload":
 			var req protocol.PrepareUploadRequest
@@ -55,34 +90,8 @@ func TestClient_SendFiles_ChecksumMismatch(t *testing.T) {
 		default:
 			http.NotFound(w, r)
 		}
-	}))
+	})
 	defer server.Close()
-
-	u, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("failed to parse server url: %v", err)
-	}
-	port, _ := strconv.Atoi(u.Port())
-
-	target := &protocol.Device{
-		Alias:       "TestReceiver",
-		Version:     "2.0",
-		DeviceModel: "Test",
-		DeviceType:  protocol.DeviceTypeDesktop,
-		Fingerprint: "",
-		Port:        port,
-		Protocol:    "http",
-		IP:          u.Hostname(),
-	}
-
-	client, err := NewClient(protocol.Device{
-		Alias:       "TestSender",
-		Version:     "2.0",
-		Fingerprint: "sender-fingerprint",
-	}, nil, "", false, "")
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
 
 	testContent := "test content"
 	testSha256 := "expected-sha256-hash"
@@ -123,7 +132,7 @@ func TestClient_SendFiles_Success(t *testing.T) {
 	fileID := "file-2"
 	token := "file-token-2"
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/localsend/v2/prepare-upload":
 			resp := protocol.PrepareUploadResponse{
@@ -146,34 +155,8 @@ func TestClient_SendFiles_Success(t *testing.T) {
 		default:
 			http.NotFound(w, r)
 		}
-	}))
+	})
 	defer server.Close()
-
-	u, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("failed to parse server url: %v", err)
-	}
-	port, _ := strconv.Atoi(u.Port())
-
-	target := &protocol.Device{
-		Alias:       "TestReceiver",
-		Version:     "2.0",
-		DeviceModel: "Test",
-		DeviceType:  protocol.DeviceTypeDesktop,
-		Fingerprint: "",
-		Port:        port,
-		Protocol:    "http",
-		IP:          u.Hostname(),
-	}
-
-	client, err := NewClient(protocol.Device{
-		Alias:       "TestSender",
-		Version:     "2.0",
-		Fingerprint: "sender-fingerprint",
-	}, nil, "", false, "")
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
 
 	testContent := "hello successful upload"
 
@@ -204,7 +187,7 @@ func TestClient_SendText(t *testing.T) {
 	sessionID := "text-session"
 	var receivedFileMeta protocol.FileMetadata
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, target, client := setupTestServerAndClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/localsend/v2/prepare-upload":
 			var req protocol.PrepareUploadRequest
@@ -224,24 +207,8 @@ func TestClient_SendText(t *testing.T) {
 		default:
 			http.NotFound(w, r)
 		}
-	}))
+	})
 	defer server.Close()
-
-	u, _ := url.Parse(server.URL)
-	port, _ := strconv.Atoi(u.Port())
-	target := &protocol.Device{
-		Alias:       "Receiver",
-		Version:     "2.0",
-		DeviceType:  protocol.DeviceTypeDesktop,
-		Port:        port,
-		Protocol:    "http",
-		IP:          u.Hostname(),
-	}
-
-	client, err := NewClient(protocol.Device{Alias: "Sender"}, nil, "", false, "")
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
 
 	textMessage := "Hello LocalSend from Go CLI!"
 	textSource := NewTextSendSource(textMessage)
