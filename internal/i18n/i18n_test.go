@@ -63,3 +63,66 @@ func TestDetectLanguage(t *testing.T) {
 		t.Errorf("Expected 'ja' or 'en', got '%s'", lang)
 	}
 }
+
+func TestSetLanguage(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialLang   string
+		inputLang     string
+		expectedResult string
+	}{
+		{
+			name:           "set to english lower",
+			initialLang:    "ja",
+			inputLang:      "en",
+			expectedResult: "en",
+		},
+		{
+			name:           "set to japanese lower",
+			initialLang:    "en",
+			inputLang:      "ja",
+			expectedResult: "ja",
+		},
+		{
+			name:           "set to english upper",
+			initialLang:    "ja",
+			inputLang:      "EN",
+			expectedResult: "en",
+		},
+		{
+			name:           "set to japanese mixed case",
+			initialLang:    "en",
+			inputLang:      "Ja",
+			expectedResult: "ja",
+		},
+		{
+			name:           "invalid language preserves current language",
+			initialLang:    "en",
+			inputLang:      "fr",
+			expectedResult: "en",
+		},
+		{
+			name:           "empty language string preserves current language",
+			initialLang:    "ja",
+			inputLang:      "",
+			expectedResult: "ja",
+		},
+		{
+			name:           "unsupported language preserves current language",
+			initialLang:    "en",
+			inputLang:      "invalid_lang",
+			expectedResult: "en",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			SetLanguage(tt.initialLang)
+			SetLanguage(tt.inputLang)
+
+			if got := GetLanguage(); got != tt.expectedResult {
+				t.Errorf("SetLanguage(%q) with initial %q = %q; want %q", tt.inputLang, tt.initialLang, got, tt.expectedResult)
+			}
+		})
+	}
+}
