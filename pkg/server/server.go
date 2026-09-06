@@ -349,7 +349,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		// Check if the session was canceled in the middle
-		if _, ok := s.sessionMgr.GetSession(sessionID); !ok {
+		if sessionObj.IsCanceled() {
 			file.Close()
 			_ = os.Remove(savedPath)
 			http.Error(w, "Upload canceled", http.StatusBadRequest)

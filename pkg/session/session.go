@@ -18,6 +18,8 @@ type UploadSession struct {
 	Files          map[string]string                // fileID -> token
 	FilesMetadata  map[string]protocol.FileMetadata // fileID -> Metadata
 	Progress       map[string]int64                 // fileID -> transferred bytes
+	ctx            context.Context
+	cancel         context.CancelFunc
 	mu             sync.RWMutex
 }
 
@@ -32,6 +34,8 @@ func NewUploadSession(clientIP string, clientVerified bool, filesMetadata map[st
 		progress[id] = 0
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &UploadSession{
 		ID:             uuid.NewString(),
 		ClientIP:       clientIP,
@@ -40,6 +44,28 @@ func NewUploadSession(clientIP string, clientVerified bool, filesMetadata map[st
 		Files:          files,
 		FilesMetadata:  filesMetadata,
 		Progress:       progress,
+		ctx:            ctx,
+		cancel:         cancel,
+	}
+}
+
+// Context returns the session's context which is canceled when the session is canceled or deleted.
+func (s *UploadSession) Context() context.Context {
+	return s.ctx
+}
+
+// Cancel cancels the session's context.
+func (s *UploadSession) Cancel() {
+	s.cancel()
+}
+
+// IsCanceled returns whether the session has been canceled.
+func (s *UploadSession) IsCanceled() bool {
+	select {
+	case <-s.ctx.Done():
+		return true
+	default:
+		return false
 	}
 }
 
@@ -120,9 +146,13 @@ func (m *SessionManager) GetSession(id string) (*UploadSession, bool) {
 	return session, true
 }
 
-// DeleteSession deletes the session by the specified ID.
+// DeleteSession deletes the session by the specified ID and cancels its context.
 func (m *SessionManager) DeleteSession(id string) {
-	m.sessions.Delete(id)
+	val, loaded := m.sessions.LoadAndDelete(id)
+	if loaded {
+		session := val.(*UploadSession)
+		session.Cancel()
+	}
 }
 
 // IsBusy returns whether there is any currently active session.
@@ -161,7 +191,9 @@ func (m *SessionManager) startCleanupLoop(interval time.Duration) {
 				session.mu.RUnlock()
 
 				if now.Sub(lastAccess) > m.timeout {
-					m.sessions.Delete(key)
+					if val, loaded := m.sessions.LoadAndDelete(key); loaded {
+						val.(*UploadSession).Cancel()
+					}
 				}
 				return true
 			})
