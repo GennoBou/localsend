@@ -63,3 +63,40 @@ func TestDetectLanguage(t *testing.T) {
 		t.Errorf("Expected 'ja' or 'en', got '%s'", lang)
 	}
 }
+
+func TestLoadTranslations_NotFound(t *testing.T) {
+	// Call loadTranslations with a non-existent language
+	loadTranslations("non_existent")
+
+	if _, exists := translations["non_existent"]; exists {
+		t.Errorf("Expected 'non_existent' translations to not be loaded")
+	}
+}
+
+func TestDetectLanguage_EnvVars(t *testing.T) {
+	tests := []struct {
+		envKey   string
+		envVal   string
+		expected string
+	}{
+		{"LC_ALL", "ja_JP.UTF-8", "ja"},
+		{"LC_MESSAGES", "en_US.UTF-8", "en"},
+		{"LANG", "ja_JP.UTF-8", "ja"},
+		{"LANG", "en_GB.UTF-8", "en"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.envKey+"="+tt.envVal, func(t *testing.T) {
+			// Clear relevant env vars first
+			for _, k := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
+				t.Setenv(k, "")
+			}
+			t.Setenv(tt.envKey, tt.envVal)
+
+			detectLanguage()
+			if GetLanguage() != tt.expected {
+				t.Errorf("Expected language '%s', got '%s'", tt.expected, GetLanguage())
+			}
+		})
+	}
+}
