@@ -833,3 +833,226 @@ func TestSaveUploadedFile(t *testing.T) {
 		t.Errorf("expected file content '%s', got '%s'", content, string(data))
 	}
 }
+
+// TestHandleInfo tests the GET /api/localsend/v2/info endpoint.
+func TestHandleInfo(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	t.Run("GET /info success", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/localsend/v2/info", nil)
+		w := httptest.NewRecorder()
+
+		s.handleInfo(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected status 200 OK, got %d", resp.StatusCode)
+		}
+
+		var info protocol.InfoResponse
+		if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+			t.Fatalf("failed to decode info response: %v", err)
+		}
+
+		if info.Alias != s.myDevice.Alias {
+			t.Errorf("expected Alias %q, got %q", s.myDevice.Alias, info.Alias)
+		}
+		if info.Version != protocol.ProtocolVersion {
+			t.Errorf("expected Version %q, got %q", protocol.ProtocolVersion, info.Version)
+		}
+	})
+
+	t.Run("POST /info method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/info", nil)
+		w := httptest.NewRecorder()
+
+		s.handleInfo(w, req)
+
+		if w.Result().StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("expected status 405 Method Not Allowed, got %d", w.Result().StatusCode)
+		}
+	})
+}
+
+// TestHandleRegister tests the POST /api/localsend/v2/register endpoint.
+func TestHandleRegister(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	var discoveredDev protocol.Device
+	s.OnDiscover = func(dev protocol.Device) {
+		discoveredDev = dev
+	}
+
+	t.Run("POST /register success", func(t *testing.T) {
+		sender := protocol.Device{
+			Alias:       "SenderPeer",
+			Version:     "2.0",
+			DeviceModel: "PeerModel",
+			DeviceType:  "desktop",
+			Fingerprint: "peer-fp-123",
+			Port:        53317,
+			Protocol:    "https",
+		}
+		bodyBytes, _ := json.Marshal(sender)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/register", strings.NewReader(string(bodyBytes)))
+		req.RemoteAddr = "192.168.1.55:12345"
+		w := httptest.NewRecorder()
+
+		s.handleRegister(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected status 200 OK, got %d", resp.StatusCode)
+		}
+
+		var ownInfo protocol.InfoResponse
+		if err := json.NewDecoder(resp.Body).Decode(&ownInfo); err != nil {
+			t.Fatalf("failed to decode register response: %v", err)
+		}
+
+		if ownInfo.Alias != s.myDevice.Alias {
+			t.Errorf("expected own Alias %q, got %q", s.myDevice.Alias, ownInfo.Alias)
+		}
+		if discoveredDev.Fingerprint != sender.Fingerprint {
+			t.Errorf("expected discovered device fingerprint %q, got %q", sender.Fingerprint, discoveredDev.Fingerprint)
+		}
+		if discoveredDev.IP != "192.168.1.55" {
+			t.Errorf("expected discovered device IP '192.168.1.55', got %q", discoveredDev.IP)
+		}
+	})
+
+	t.Run("GET /register method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/localsend/v2/register", nil)
+		w := httptest.NewRecorder()
+
+		s.handleRegister(w, req)
+
+		if w.Result().StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("expected status 405 Method Not Allowed, got %d", w.Result().StatusCode)
+		}
+	})
+
+	t.Run("POST /register invalid JSON", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/register", strings.NewReader("invalid-json"))
+		w := httptest.NewRecorder()
+
+		s.handleRegister(w, req)
+
+		if w.Result().StatusCode != http.StatusBadRequest {
+			t.Errorf("expected status 400 Bad Request, got %d", w.Result().StatusCode)
+		}
+	})
+}
+
+// TestHandleCancel tests the POST /api/localsend/v2/cancel endpoint.
+func TestHandleCancel(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	sessionObj := s.sessionMgr.CreateSession("127.0.0.1", false, nil)
+
+	t.Run("POST /cancel success", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/cancel?sessionId="+sessionObj.ID, nil)
+		w := httptest.NewRecorder()
+
+		s.handleCancel(w, req)
+
+		if w.Result().StatusCode != http.StatusOK {
+			t.Errorf("expected status 200 OK, got %d", w.Result().StatusCode)
+		}
+
+		if _, ok := s.sessionMgr.GetSession(sessionObj.ID); ok {
+			t.Errorf("expected session %s to be deleted after cancel", sessionObj.ID)
+		}
+	})
+
+	t.Run("GET /cancel method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/localsend/v2/cancel", nil)
+		w := httptest.NewRecorder()
+
+		s.handleCancel(w, req)
+
+		if w.Result().StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("expected status 405 Method Not Allowed, got %d", w.Result().StatusCode)
+		}
+	})
+}
+
+// TestGetUniquePath tests file name conflict resolution.
+func TestGetUniquePath(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "localsend-uniquepath-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// 1. When file does not exist, return original filename path
+	path0 := getUniquePath(tempDir, "doc.txt")
+	expected0 := filepath.Join(tempDir, "doc.txt")
+	if path0 != expected0 {
+		t.Errorf("getUniquePath(0) = %q, want %q", path0, expected0)
+	}
+
+	// Create doc.txt
+	_ = os.WriteFile(expected0, []byte("data"), 0644)
+
+	// 2. When doc.txt exists, return doc (1).txt
+	path1 := getUniquePath(tempDir, "doc.txt")
+	expected1 := filepath.Join(tempDir, "doc (1).txt")
+	if path1 != expected1 {
+		t.Errorf("getUniquePath(1) = %q, want %q", path1, expected1)
+	}
+
+	// Create doc (1).txt
+	_ = os.WriteFile(expected1, []byte("data"), 0644)
+
+	// 3. When doc (1).txt exists, return doc (2).txt
+	path2 := getUniquePath(tempDir, "doc.txt")
+	expected2 := filepath.Join(tempDir, "doc (2).txt")
+	if path2 != expected2 {
+		t.Errorf("getUniquePath(2) = %q, want %q", path2, expected2)
+	}
+}
+
+// TestFilterAcceptedFiles tests filterAcceptedFiles under various rejection/acceptance scenarios.
+func TestFilterAcceptedFiles(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	files := map[string]protocol.FileMetadata{
+		"f1": {ID: "f1", FileName: "1.txt"},
+		"f2": {ID: "f2", FileName: "2.txt"},
+	}
+
+	t.Run("No callback accepts all files", func(t *testing.T) {
+		s.OnPrepareUpload = nil
+		filtered := s.filterAcceptedFiles(s.myDevice, files)
+		if len(filtered) != 2 {
+			t.Errorf("expected 2 files, got %d", len(filtered))
+		}
+	})
+
+	t.Run("Callback rejects entirely", func(t *testing.T) {
+		s.OnPrepareUpload = func(sender protocol.Device, files []protocol.FileMetadata) (map[string]bool, bool) {
+			return nil, false
+		}
+		filtered := s.filterAcceptedFiles(s.myDevice, files)
+		if filtered != nil {
+			t.Errorf("expected nil when rejected, got %+v", filtered)
+		}
+	})
+
+	t.Run("Callback rejects all files explicitly", func(t *testing.T) {
+		s.OnPrepareUpload = func(sender protocol.Device, files []protocol.FileMetadata) (map[string]bool, bool) {
+			return map[string]bool{"f1": false, "f2": false}, true
+		}
+		filtered := s.filterAcceptedFiles(s.myDevice, files)
+		if filtered != nil {
+			t.Errorf("expected nil when all files rejected, got %+v", filtered)
+		}
+	})
+}
+
