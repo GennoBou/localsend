@@ -130,7 +130,14 @@ LocalSendプロトコルのデータ型と、CLI等でハンドリングしや�
       Err    error
   }
 
-  func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files []SendFileSource, progress func(fileID string, sentBytes int64)) ([]SendResult, error)
+  type SendRequest struct {
+      Target   *protocol.Device
+      Files    []SendFileSource
+      PIN      string
+      Progress func(fileID string, sentBytes int64)
+  }
+
+  func (c *Client) SendFiles(ctx context.Context, req SendRequest) ([]SendResult, error)
   ```
   ※ `prepare-upload` の失敗などの致命的なセッションエラーは、関数の第2戻り値 `error` として返します。
 

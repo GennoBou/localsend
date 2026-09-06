@@ -100,7 +100,10 @@ func TestClient_SendFiles_ChecksumMismatch(t *testing.T) {
 		},
 	}
 
-	results, err := client.SendFiles(context.Background(), target, files, "", nil)
+	results, err := client.SendFiles(context.Background(), SendRequest{
+		Target: target,
+		Files:  files,
+	})
 	if err == nil {
 		t.Fatal("expected error due to 422 checksum mismatch, got nil")
 	}
@@ -190,7 +193,10 @@ func TestClient_SendFiles_Success(t *testing.T) {
 		},
 	}
 
-	results, err := client.SendFiles(context.Background(), target, files, "", nil)
+	results, err := client.SendFiles(context.Background(), SendRequest{
+		Target: target,
+		Files:  files,
+	})
 	if err != nil {
 		t.Fatalf("expected successful send, got error: %v", err)
 	}
@@ -253,7 +259,10 @@ func TestClient_SendText(t *testing.T) {
 		t.Errorf("expected FileType text/plain, got %q", textSource.FileType)
 	}
 
-	results, err := client.SendFiles(context.Background(), target, []SendFileSource{textSource}, "", nil)
+	results, err := client.SendFiles(context.Background(), SendRequest{
+		Target: target,
+		Files:  []SendFileSource{textSource},
+	})
 	if err != nil {
 		t.Fatalf("failed to send text: %v", err)
 	}

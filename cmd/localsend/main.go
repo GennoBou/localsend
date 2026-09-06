@@ -562,7 +562,12 @@ var sendCmd = &cobra.Command{
 		}
 
 		ctx := context.Background()
-		results, err := cli.SendFiles(ctx, &targetDevice, files, pin, progressFunc)
+		results, err := cli.SendFiles(ctx, client.SendRequest{
+			Target:   &targetDevice,
+			Files:    files,
+			PIN:      pin,
+			Progress: progressFunc,
+		})
 		fmt.Println()
 
 		if err != nil {

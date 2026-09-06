@@ -130,7 +130,14 @@ Manages active upload sessions in a thread-safe manner.
       Err    error
   }
 
-  func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files []SendFileSource, progress func(fileID string, sentBytes int64)) ([]SendResult, error)
+  type SendRequest struct {
+      Target   *protocol.Device
+      Files    []SendFileSource
+      PIN      string
+      Progress func(fileID string, sentBytes int64)
+  }
+
+  func (c *Client) SendFiles(ctx context.Context, req SendRequest) ([]SendResult, error)
   ```
   *Note: Critical session errors (such as rejection in `/prepare-upload`) are returned as the second return value `error`.*
 

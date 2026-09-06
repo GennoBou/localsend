@@ -31,6 +31,14 @@ type SendFileSource struct {
 	Open     func() (io.ReadCloser, error) // Callback to open the file dynamically during transfer
 }
 
+// SendRequest contains parameters for sending files in bulk.
+type SendRequest struct {
+	Target   *protocol.Device
+	Files    []SendFileSource
+	PIN      string
+	Progress func(fileID string, sentBytes int64)
+}
+
 // SendResult represents the transmission result for each file.
 type SendResult struct {
 	FileID string
@@ -152,10 +160,10 @@ func (c *Client) verifyPeerFingerprint(resp *http.Response, expectedFingerprint 
 }
 
 // SendFiles sends multiple files in bulk to the specified target device.
-func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files []SendFileSource, pin string, progress func(fileID string, sentBytes int64)) ([]SendResult, error) {
+func (c *Client) SendFiles(ctx context.Context, req SendRequest) ([]SendResult, error) {
 	// 1. Prepare upload request
 	filesMap := make(map[string]protocol.FileMetadata)
-	for _, f := range files {
+	for _, f := range req.Files {
 		filesMap[f.ID] = protocol.FileMetadata{
 			ID:       f.ID,
 			FileName: f.FileName,
@@ -176,31 +184,31 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 		return nil, fmt.Errorf("failed to marshal prepare request: %w", err)
 	}
 
-	targetURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/prepare-upload", target.Protocol, target.IP, target.Port)
-	if pin != "" {
-		targetURL += "?pin=" + pin
+	targetURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/prepare-upload", req.Target.Protocol, req.Target.IP, req.Target.Port)
+	if req.PIN != "" {
+		targetURL += "?pin=" + req.PIN
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, strings.NewReader(string(reqData)))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, strings.NewReader(string(reqData)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create prepare request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute prepare request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if err := c.verifyPeerFingerprint(resp, target.Fingerprint); err != nil {
+	if err := c.verifyPeerFingerprint(resp, req.Target.Fingerprint); err != nil {
 		return nil, fmt.Errorf("failed to verify peer: %w", err)
 	}
 
 	switch resp.StatusCode {
 	case http.StatusNoContent: // 204: The same file already exists and transfer is not required
-		results := make([]SendResult, len(files))
-		for i, f := range files {
+		results := make([]SendResult, len(req.Files))
+		for i, f := range req.Files {
 			results[i] = SendResult{FileID: f.ID, Err: nil}
 		}
 		return results, nil
@@ -226,7 +234,7 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 
 	// Helper function to cancel the session
 	cancelSession := func() {
-		cancelURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/cancel?sessionId=%s", target.Protocol, target.IP, target.Port, sessionID)
+		cancelURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/cancel?sessionId=%s", req.Target.Protocol, req.Target.IP, req.Target.Port, sessionID)
 		cancelReq, err := http.NewRequest("POST", cancelURL, nil)
 		if err == nil {
 			_, _ = c.httpClient.Do(cancelReq)
@@ -234,7 +242,7 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 	}
 
 	// 2. Upload each file sequentially
-	for _, f := range files {
+	for _, f := range req.Files {
 		token, exists := prepResp.Files[f.ID]
 		if !exists {
 			results = append(results, SendResult{FileID: f.ID, Err: fmt.Errorf("file not accepted by receiver")})
@@ -251,26 +259,26 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 			progReader := &progressReader{
 				r:        fileReader,
 				fileID:   f.ID,
-				progress: progress,
+				progress: req.Progress,
 				total:    f.Size,
 			}
 
-			uploadURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/upload?sessionId=%s&fileId=%s&token=%s", target.Protocol, target.IP, target.Port, sessionID, f.ID, token)
+			uploadURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/upload?sessionId=%s&fileId=%s&token=%s", req.Target.Protocol, req.Target.IP, req.Target.Port, sessionID, f.ID, token)
 
-			req, err := http.NewRequestWithContext(ctx, "POST", uploadURL, io.NopCloser(progReader))
+			httpUploadReq, err := http.NewRequestWithContext(ctx, "POST", uploadURL, io.NopCloser(progReader))
 			if err != nil {
 				return fmt.Errorf("failed to create upload request: %w", err)
 			}
-			req.ContentLength = f.Size
-			req.Header.Set("Content-Type", "application/octet-stream")
+			httpUploadReq.ContentLength = f.Size
+			httpUploadReq.Header.Set("Content-Type", "application/octet-stream")
 
-			resp, err := c.httpClient.Do(req)
+			resp, err := c.httpClient.Do(httpUploadReq)
 			if err != nil {
 				return fmt.Errorf("failed to upload file data: %w", err)
 			}
 			defer resp.Body.Close()
 
-			if err := c.verifyPeerFingerprint(resp, target.Fingerprint); err != nil {
+			if err := c.verifyPeerFingerprint(resp, req.Target.Fingerprint); err != nil {
 				return fmt.Errorf("failed to verify peer: %w", err)
 			}
 
