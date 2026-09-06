@@ -33,9 +33,11 @@ var (
 )
 
 func logDebug(format string, v ...interface{}) {
-	if debugFlag {
-		fmt.Printf("[DEBUG] "+format+"\n", v...)
+	if !debugFlag {
+		return
 	}
+	msg := fmt.Sprintf(format, v...)
+	fmt.Printf("[DEBUG] %s\n", msg)
 }
 
 var rootCmd = &cobra.Command{
