@@ -326,3 +326,89 @@ func TestScanLegacy(t *testing.T) {
 	// ScanLegacy runs without panic or error even if no target hosts respond
 	ScanLegacy(ctx, myDevice, onDiscover)
 }
+
+func TestScanHost_Errors(t *testing.T) {
+	myDevice := protocol.Device{
+		Alias:       "Scanner",
+		Version:     "2.0",
+		Fingerprint: "scanner-fp",
+		Port:        53317,
+	}
+
+	t.Run("server returns 500 error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "server error", http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		u, _ := url.Parse(server.URL)
+		host, portStr, _ := net.SplitHostPort(u.Host)
+		port, _ := strconv.Atoi(portStr)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+
+		discovered := false
+		scanHost(ScanConfig{
+			Ctx:        ctx,
+			Client:     server.Client(),
+			MyDevice:   myDevice,
+			IP:         host,
+			Port:       port,
+			OnDiscover: func(dev protocol.Device) { discovered = true },
+		})
+
+		if discovered {
+			t.Errorf("expected no discovery on 500 status")
+		}
+	})
+
+	t.Run("server returns invalid JSON", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("not a json object"))
+		}))
+		defer server.Close()
+
+		u, _ := url.Parse(server.URL)
+		host, portStr, _ := net.SplitHostPort(u.Host)
+		port, _ := strconv.Atoi(portStr)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+
+		discovered := false
+		scanHost(ScanConfig{
+			Ctx:        ctx,
+			Client:     server.Client(),
+			MyDevice:   myDevice,
+			IP:         host,
+			Port:       port,
+			OnDiscover: func(dev protocol.Device) { discovered = true },
+		})
+
+		if discovered {
+			t.Errorf("expected no discovery on invalid JSON response")
+		}
+	})
+
+	t.Run("connection refusal or unreachable port", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+
+		discovered := false
+		scanHost(ScanConfig{
+			Ctx:        ctx,
+			Client:     &http.Client{Timeout: 200 * time.Millisecond},
+			MyDevice:   myDevice,
+			IP:         "127.0.0.1",
+			Port:       54999, // Unused port
+			OnDiscover: func(dev protocol.Device) { discovered = true },
+		})
+
+		if discovered {
+			t.Errorf("expected no discovery on closed port")
+		}
+	})
+}
+
