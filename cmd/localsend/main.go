@@ -171,18 +171,10 @@ var receiveCmd = &cobra.Command{
 			myDevice.Alias = alias
 		}
 
-		saveDir := dir
-		if saveDir == "" {
-			cwd, err := os.Getwd()
-			if err != nil {
-				fmt.Printf("Error getting current directory: %v\n", err)
-				os.Exit(1)
-			}
-			saveDir = cwd
-		}
-		absSaveDir, err := filepath.Abs(saveDir)
-		if err == nil {
-			saveDir = absSaveDir
+		saveDir, err := determineSaveDir(dir, os.Getwd)
+		if err != nil {
+			fmt.Printf("Error getting current directory: %v\n", err)
+			os.Exit(1)
 		}
 
 		var tlsCert tls.Certificate
@@ -633,6 +625,23 @@ func main() {
 		fmt.Printf("Command execution failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// determineSaveDir determines the save directory for received files.
+// If dir is empty, it uses the provided getwd function to get the current directory.
+func determineSaveDir(dir string, getwd func() (string, error)) (string, error) {
+	saveDir := dir
+	if saveDir == "" {
+		cwd, err := getwd()
+		if err != nil {
+			return "", err
+		}
+		saveDir = cwd
+	}
+	if absSaveDir, err := filepath.Abs(saveDir); err == nil {
+		saveDir = absSaveDir
+	}
+	return saveDir, nil
 }
 
 // computeFileSha256 computes the SHA-256 checksum of a file given its path.
