@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/GennoBou/localsend/pkg/protocol"
+	"github.com/google/uuid"
 )
 
 // UploadSession manages the state of a single file transfer session.
@@ -18,7 +18,7 @@ type UploadSession struct {
 	Files          map[string]string                // fileID -> token
 	FilesMetadata  map[string]protocol.FileMetadata // fileID -> Metadata
 	Progress       map[string]int64                 // fileID -> transferred bytes
-	completedFiles map[string]bool                 // fileID -> completed flag
+	completedFiles map[string]bool                  // fileID -> completed flag
 	ctx            context.Context
 	cancel         context.CancelFunc
 	mu             sync.RWMutex

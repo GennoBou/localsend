@@ -230,12 +230,12 @@ func TestClient_SendText(t *testing.T) {
 	u, _ := url.Parse(server.URL)
 	port, _ := strconv.Atoi(u.Port())
 	target := &protocol.Device{
-		Alias:       "Receiver",
-		Version:     "2.0",
-		DeviceType:  protocol.DeviceTypeDesktop,
-		Port:        port,
-		Protocol:    "http",
-		IP:          u.Hostname(),
+		Alias:      "Receiver",
+		Version:    "2.0",
+		DeviceType: protocol.DeviceTypeDesktop,
+		Port:       port,
+		Protocol:   "http",
+		IP:         u.Hostname(),
 	}
 
 	client, err := NewClient(protocol.Device{Alias: "Sender"}, nil, "", false, "")

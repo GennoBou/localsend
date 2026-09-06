@@ -18,10 +18,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/GennoBou/localsend/pkg/crypto"
 	"github.com/GennoBou/localsend/pkg/protocol"
 	"github.com/GennoBou/localsend/pkg/session"
+	"github.com/google/uuid"
 )
 
 // ShareFile defines a file to be shared in reverse file transfer (Download API).

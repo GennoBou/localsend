@@ -370,4 +370,3 @@ func isPrivateIP(ip net.IP) bool {
 		(ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) ||
 		(ip4[0] == 192 && ip4[1] == 168)
 }
-

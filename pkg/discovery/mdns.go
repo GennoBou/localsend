@@ -294,4 +294,3 @@ func StartAdvertising(ctx context.Context, myDevice protocol.Device, mode Discov
 
 	return adv, nil
 }
-
