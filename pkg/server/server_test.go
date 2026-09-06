@@ -733,3 +733,103 @@ func TestPathTraversalPrevention(t *testing.T) {
 		t.Errorf("expected file to be saved in saveDir as %s, but not found", sanitizedPath)
 	}
 }
+
+// TestValidateUploadRequest tests unit behavior of validateUploadRequest.
+func TestValidateUploadRequest(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	meta := protocol.FileMetadata{
+		ID:       "val-file-id",
+		FileName: "val-test.txt",
+		Size:     100,
+		FileType: "text/plain",
+	}
+	sessionObj := s.sessionMgr.CreateSession("127.0.0.1", false, map[string]protocol.FileMetadata{meta.ID: meta})
+	token, _, _ := sessionObj.GetFileTokenAndMeta(meta.ID)
+
+	t.Run("Valid request", func(t *testing.T) {
+		query := url.Values{}
+		query.Set("sessionId", sessionObj.ID)
+		query.Set("fileId", meta.ID)
+		query.Set("token", token)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/upload?"+query.Encode(), nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+
+		sess, fileMeta, status, errMsg := s.validateUploadRequest(req)
+		if status != http.StatusOK {
+			t.Fatalf("expected status 200, got %d (msg: %s)", status, errMsg)
+		}
+		if sess.ID != sessionObj.ID {
+			t.Errorf("expected session ID %s, got %s", sessionObj.ID, sess.ID)
+		}
+		if fileMeta.ID != meta.ID {
+			t.Errorf("expected file ID %s, got %s", meta.ID, fileMeta.ID)
+		}
+	})
+
+	t.Run("Invalid session ID", func(t *testing.T) {
+		query := url.Values{}
+		query.Set("sessionId", "invalid-session")
+		query.Set("fileId", meta.ID)
+		query.Set("token", token)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/upload?"+query.Encode(), nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+
+		_, _, status, errMsg := s.validateUploadRequest(req)
+		if status != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d", status)
+		}
+		if errMsg != "Session not found" {
+			t.Errorf("expected 'Session not found', got '%s'", errMsg)
+		}
+	})
+
+	t.Run("IP mismatch", func(t *testing.T) {
+		query := url.Values{}
+		query.Set("sessionId", sessionObj.ID)
+		query.Set("fileId", meta.ID)
+		query.Set("token", token)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/upload?"+query.Encode(), nil)
+		req.RemoteAddr = "192.168.1.100:12345"
+
+		_, _, status, errMsg := s.validateUploadRequest(req)
+		if status != http.StatusForbidden {
+			t.Fatalf("expected status 403, got %d", status)
+		}
+		if errMsg != "IP address mismatch" {
+			t.Errorf("expected 'IP address mismatch', got '%s'", errMsg)
+		}
+	})
+}
+
+// TestSaveUploadedFile tests unit behavior of saveUploadedFile.
+func TestSaveUploadedFile(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	content := "test data streaming content"
+	meta := protocol.FileMetadata{
+		ID:       "save-file-id",
+		FileName: "save-test.txt",
+		Size:     int64(len(content)),
+		FileType: "text/plain",
+	}
+	sessionObj := s.sessionMgr.CreateSession("127.0.0.1", false, map[string]protocol.FileMetadata{meta.ID: meta})
+
+	savedPath, status, errMsg := s.saveUploadedFile(sessionObj, meta, strings.NewReader(content))
+	if status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (msg: %s)", status, errMsg)
+	}
+
+	data, err := os.ReadFile(savedPath)
+	if err != nil {
+		t.Fatalf("failed to read saved file: %v", err)
+	}
+	if string(data) != content {
+		t.Errorf("expected file content '%s', got '%s'", content, string(data))
+	}
+}

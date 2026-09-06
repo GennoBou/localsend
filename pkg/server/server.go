@@ -174,6 +174,61 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.writeInfo(w)
 }
 
+// validatePIN checks whether the PIN provided in the request query matches the server's PIN.
+func (s *Server) validatePIN(r *http.Request) bool {
+	if s.pin == "" {
+		return true
+	}
+	return r.URL.Query().Get("pin") == s.pin
+}
+
+// areAllFilesDuplicate returns true if all requested files already exist in saveDir with matching file sizes.
+func (s *Server) areAllFilesDuplicate(files map[string]protocol.FileMetadata) bool {
+	if len(files) == 0 {
+		return false
+	}
+	for _, f := range files {
+		cleanName := filepath.Base(f.FileName)
+		targetPath := filepath.Join(s.saveDir, cleanName)
+		info, err := os.Stat(targetPath)
+		if err != nil || info.Size() != f.Size {
+			return false
+		}
+	}
+	return true
+}
+
+// filterAcceptedFiles executes the OnPrepareUpload callback if configured and filters the files accordingly.
+// Returns nil if no files are accepted or if reception is rejected.
+func (s *Server) filterAcceptedFiles(sender protocol.Device, files map[string]protocol.FileMetadata) map[string]protocol.FileMetadata {
+	var filesList []protocol.FileMetadata
+	for _, f := range files {
+		filesList = append(filesList, f)
+	}
+
+	acceptedFiles, accepted := map[string]bool(nil), true
+	if s.OnPrepareUpload != nil {
+		acceptedFiles, accepted = s.OnPrepareUpload(sender, filesList)
+	}
+
+	if !accepted {
+		return nil
+	}
+
+	filteredFiles := make(map[string]protocol.FileMetadata)
+	for id, f := range files {
+		if acceptedFiles == nil || acceptedFiles[id] {
+			filteredFiles[id] = f
+		}
+	}
+
+	if len(filteredFiles) == 0 {
+		return nil
+	}
+
+	return filteredFiles
+}
+
 // handlePrepareUpload handles the POST /api/localsend/v2/prepare-upload endpoint.
 func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -182,12 +237,9 @@ func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. PIN validation
-	if s.pin != "" {
-		reqPin := r.URL.Query().Get("pin")
-		if reqPin != s.pin {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
+	if !s.validatePIN(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
 	}
 
 	// 2. Client certificate hash validation
@@ -205,25 +257,8 @@ func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if it matches the registered fingerprint during prepare-upload
-
 	// 2.5 Check for duplicate files (204 No Content).
-	// Verify if all files already exist in the save directory (same name and size)
-	allDuplicate := true
-	for _, f := range req.Files {
-		cleanName := filepath.Base(f.FileName)
-		targetPath := filepath.Join(s.saveDir, cleanName)
-		info, err := os.Stat(targetPath)
-		if err != nil {
-			allDuplicate = false
-			break
-		}
-		if info.Size() != f.Size {
-			allDuplicate = false
-			break
-		}
-	}
-	if len(req.Files) > 0 && allDuplicate {
+	if s.areAllFilesDuplicate(req.Files) {
 		w.WriteHeader(http.StatusNoContent) // 204 No Content (ファイル転送不要)
 		return
 	}
@@ -238,32 +273,9 @@ func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 	senderIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	req.Info.IP = senderIP
 
-	var filesList []protocol.FileMetadata
-	for _, f := range req.Files {
-		filesList = append(filesList, f)
-	}
-
-	acceptedFiles, accepted := map[string]bool(nil), true
-	if s.OnPrepareUpload != nil {
-		acceptedFiles, accepted = s.OnPrepareUpload(req.Info, filesList)
-	}
-
-	if !accepted {
+	filteredFiles := s.filterAcceptedFiles(req.Info, req.Files)
+	if filteredFiles == nil {
 		w.WriteHeader(http.StatusForbidden) // 403 Forbidden
-		return
-	}
-
-	// Filter to only accepted files
-	filteredFiles := make(map[string]protocol.FileMetadata)
-	for id, f := range req.Files {
-		if acceptedFiles == nil || acceptedFiles[id] {
-			filteredFiles[id] = f
-		}
-	}
-
-	// Return 403 Forbidden if none are accepted
-	if len(filteredFiles) == 0 {
-		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
@@ -282,61 +294,55 @@ func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// handleUpload handles the POST /api/localsend/v2/upload endpoint.
-func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+// validateUploadRequest validates session, tokens, client IP, and TLS certificate for an upload request.
+func (s *Server) validateUploadRequest(r *http.Request) (*session.UploadSession, protocol.FileMetadata, int, string) {
 	sessionID := r.URL.Query().Get("sessionId")
 	fileID := r.URL.Query().Get("fileId")
 	token := r.URL.Query().Get("token")
 
 	sessionObj, ok := s.sessionMgr.GetSession(sessionID)
 	if !ok {
-		http.Error(w, "Session not found", http.StatusBadRequest)
-		return
+		return nil, protocol.FileMetadata{}, http.StatusBadRequest, "Session not found"
 	}
 
 	expectedToken, fileMeta, exists := sessionObj.GetFileTokenAndMeta(fileID)
 	clientIP, clientVerified := sessionObj.GetClientInfo()
 
 	if !exists || expectedToken != token {
-		http.Error(w, "Invalid token or fileId", http.StatusBadRequest)
-		return
+		return nil, protocol.FileMetadata{}, http.StatusBadRequest, "Invalid token or fileId"
 	}
 
 	// Verify the client's IP address
 	remoteIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if remoteIP != clientIP {
-		http.Error(w, "IP address mismatch", http.StatusForbidden)
-		return
+		return nil, protocol.FileMetadata{}, http.StatusForbidden, "IP address mismatch"
 	}
 
 	// Re-validate the certificate hash if strictTLS is enabled
 	if s.strictTLS {
 		_, hasCert := s.checkClientCertificate(r)
 		if !hasCert || !clientVerified {
-			http.Error(w, "TLS connection untrusted", http.StatusForbidden)
-			return
+			return nil, protocol.FileMetadata{}, http.StatusForbidden, "TLS connection untrusted"
 		}
-		// Check if it matches the registered fingerprint during prepare-upload
-		if fileMeta.ID == "" { // 無効チェック
-			http.Error(w, "Internal error", http.StatusInternalServerError)
-			return
+		if fileMeta.ID == "" {
+			return nil, protocol.FileMetadata{}, http.StatusInternalServerError, "Internal error"
 		}
-		// Ideally compared with the fingerprint recorded in sessionObj.
-		// Here clientVerified flag indicates it is already verified.
 	}
+
+	return sessionObj, fileMeta, http.StatusOK, ""
+}
+
+// saveUploadedFile reads data from the reader, writes to disk, monitors progress, and verifies checksum.
+func (s *Server) saveUploadedFile(sessionObj *session.UploadSession, fileMeta protocol.FileMetadata, body io.Reader) (string, int, string) {
+	sessionID := sessionObj.ID
+	fileID := fileMeta.ID
 
 	// Determine a unique save path to avoid conflicts
 	savedPath := getUniquePath(s.saveDir, fileMeta.FileName)
 
 	file, err := os.Create(savedPath)
 	if err != nil {
-		http.Error(w, "Failed to create file", http.StatusInternalServerError)
-		return
+		return "", http.StatusInternalServerError, "Failed to create file"
 	}
 	defer file.Close()
 
@@ -352,11 +358,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		if sessionObj.IsCanceled() {
 			file.Close()
 			_ = os.Remove(savedPath)
-			http.Error(w, "Upload canceled", http.StatusBadRequest)
-			return
+			return "", http.StatusBadRequest, "Upload canceled"
 		}
 
-		nr, er := r.Body.Read(buffer)
+		nr, er := body.Read(buffer)
 		if nr > 0 {
 			nw, ew := writer.Write(buffer[:nr])
 			if nw > 0 {
@@ -367,20 +372,17 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if ew != nil {
-				http.Error(w, "Write error", http.StatusInternalServerError)
-				return
+				return "", http.StatusInternalServerError, "Write error"
 			}
 			if nr != nw {
-				http.Error(w, "Short write", http.StatusInternalServerError)
-				return
+				return "", http.StatusInternalServerError, "Short write"
 			}
 		}
 		if er != nil {
 			if er == io.EOF {
 				break
 			}
-			http.Error(w, "Read error", http.StatusInternalServerError)
-			return
+			return "", http.StatusInternalServerError, "Read error"
 		}
 	}
 
@@ -390,18 +392,39 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		if !strings.EqualFold(calculatedHash, fileMeta.Sha256) {
 			file.Close()
 			_ = os.Remove(savedPath)
-			http.Error(w, "Checksum mismatch", http.StatusUnprocessableEntity)
-			return
+			return "", http.StatusUnprocessableEntity, "Checksum mismatch"
 		}
 	}
 
+	return savedPath, http.StatusOK, ""
+}
+
+// handleUpload handles the POST /api/localsend/v2/upload endpoint.
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionObj, fileMeta, status, errMsg := s.validateUploadRequest(r)
+	if status != http.StatusOK {
+		http.Error(w, errMsg, status)
+		return
+	}
+
+	savedPath, status, errMsg := s.saveUploadedFile(sessionObj, fileMeta, r.Body)
+	if status != http.StatusOK {
+		http.Error(w, errMsg, status)
+		return
+	}
+
 	if s.OnDone != nil {
-		s.OnDone(sessionID, fileID, savedPath)
+		s.OnDone(sessionObj.ID, fileMeta.ID, savedPath)
 	}
 
 	// Release the session if transfer for all files in the session is completed
 	if sessionObj.IsCompleted() {
-		s.sessionMgr.DeleteSession(sessionID)
+		s.sessionMgr.DeleteSession(sessionObj.ID)
 	}
 
 	w.WriteHeader(http.StatusOK)

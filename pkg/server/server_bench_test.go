@@ -1,8 +1,8 @@
 package server
 
 import (
+	"crypto/tls"
 	"io"
-	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -16,29 +16,30 @@ type repeatReader struct {
 	remaining int64
 }
 
-func (r *repeatReader) Read(p []byte) (n int, err error) {
+func (r *repeatReader) Read(p []byte) (int, error) {
 	if r.remaining <= 0 {
 		return 0, io.EOF
 	}
-	toRead := int64(len(p))
-	if toRead > r.remaining {
-		toRead = r.remaining
+	toRead := len(p)
+	if int64(toRead) > r.remaining {
+		toRead = int(r.remaining)
 	}
-	for i := 0; i < int(toRead); i++ {
-		p[i] = 'A'
+	for i := 0; i < toRead; i++ {
+		p[i] = byte(i % 256)
 	}
-	r.remaining -= toRead
-	return int(toRead), nil
+	r.remaining -= int64(toRead)
+	return toRead, nil
 }
 
-func BenchmarkHandleUpload(b *testing.B) {
-	tempDir, err := os.MkdirTemp("", "localsend-bench-*")
+func BenchmarkHandleUpload_Throughput(b *testing.B) {
+	tempDir, err := os.MkdirTemp("", "localsend-server-bench-*")
 	if err != nil {
 		b.Fatalf("failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	tlsCert, _, _, _, err := crypto.GenerateSelfSignedCert()
+	var tlsCert tls.Certificate
+	tlsCert, _, _, _, err = crypto.GenerateSelfSignedCert()
 	if err != nil {
 		b.Fatalf("failed to generate TLS cert: %v", err)
 	}
@@ -83,7 +84,7 @@ func BenchmarkHandleUpload(b *testing.B) {
 		query.Set("token", token)
 
 		body := &repeatReader{remaining: fileSize}
-		req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/upload?"+query.Encode(), body)
+		req := httptest.NewRequest("POST", "/api/localsend/v2/upload?"+query.Encode(), body)
 		req.RemoteAddr = "127.0.0.1:12345"
 		w := httptest.NewRecorder()
 
