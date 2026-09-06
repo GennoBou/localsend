@@ -534,6 +534,17 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	s.downloadMu.Lock()
+	files := s.sharedFiles
+	sessionID := s.downloadSession
+	alias := s.myDevice.Alias
+	s.downloadMu.Unlock()
+
+	s.renderWebUI(w, alias, sessionID, files)
+}
+
+// renderWebUI renders the HTML download screen for web browsers.
+func (s *Server) renderWebUI(w http.ResponseWriter, alias string, sessionID string, files []ShareFile) {
 	const htmlTemplate = `<!DOCTYPE html>
 <html>
 <head>
@@ -571,12 +582,6 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
     </div>
 </body>
 </html>`
-
-	s.downloadMu.Lock()
-	files := s.sharedFiles
-	sessionID := s.downloadSession
-	alias := s.myDevice.Alias
-	s.downloadMu.Unlock()
 
 	tmpl, err := template.New("webui").Parse(htmlTemplate)
 	if err != nil {
