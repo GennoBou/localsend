@@ -28,7 +28,7 @@ func listenMulticastUDP(network string, address string) (*net.UDPConn, error) {
 		Control: func(network, address string, c syscall.RawConn) error {
 			return c.Control(func(fd uintptr) {
 				// Enable port reuse so multiple applications can bind to 5353
-				_ = syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				_ = setReuseAddr(fd)
 			})
 		},
 	}
