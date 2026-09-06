@@ -233,6 +233,8 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 		}
 	}
 
+	uploadBaseURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/upload?sessionId=%s", target.Protocol, target.IP, target.Port, sessionID)
+
 	// 2. Upload each file sequentially
 	for _, f := range files {
 		token, exists := prepResp.Files[f.ID]
@@ -241,7 +243,7 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 			continue
 		}
 
-		err := c.uploadFile(ctx, target, sessionID, f, token, progress)
+		err := c.uploadFile(ctx, target, uploadBaseURL, f, token, progress)
 		if err != nil {
 			// Cancel the entire session if even one file fails
 			cancelSession()
@@ -256,7 +258,7 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 }
 
 // uploadFile performs the upload of a single file to the target device.
-func (c *Client) uploadFile(ctx context.Context, target *protocol.Device, sessionID string, f SendFileSource, token string, progress func(fileID string, sentBytes int64)) error {
+func (c *Client) uploadFile(ctx context.Context, target *protocol.Device, uploadBaseURL string, f SendFileSource, token string, progress func(fileID string, sentBytes int64)) error {
 	fileReader, err := f.Open()
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
@@ -270,7 +272,7 @@ func (c *Client) uploadFile(ctx context.Context, target *protocol.Device, sessio
 		total:    f.Size,
 	}
 
-	uploadURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/upload?sessionId=%s&fileId=%s&token=%s", target.Protocol, target.IP, target.Port, sessionID, f.ID, token)
+	uploadURL := uploadBaseURL + "&fileId=" + f.ID + "&token=" + token
 
 	req, err := http.NewRequestWithContext(ctx, "POST", uploadURL, io.NopCloser(progReader))
 	if err != nil {
