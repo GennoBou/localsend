@@ -1,6 +1,7 @@
 package session
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func TestUploadSession_IsCompleted(t *testing.T) {
 }
 
 func TestSessionManager(t *testing.T) {
-	// テスト用に短いタイムアウト（50ms）を設定
+	// Short timeout (50ms) for testing
 	mgr := NewSessionManager(50 * time.Millisecond)
 	defer mgr.Close()
 
@@ -62,30 +63,30 @@ func TestSessionManager(t *testing.T) {
 		"file1": {ID: "file1", FileName: "test.txt", Size: 100},
 	}
 
-	// 1. セッションの作成
+	// 1. Create session
 	sess := mgr.CreateSession("192.168.1.100", false, files)
 	if sess == nil {
 		t.Fatal("Failed to create session")
 	}
 
-	// 2. セッションの取得
+	// 2. Retrieve session
 	retrieved, ok := mgr.GetSession(sess.ID)
 	if !ok || retrieved.ID != sess.ID {
 		t.Error("Failed to retrieve session")
 	}
 
-	// 3. ビジー状態の確認
+	// 3. Busy status check
 	if !mgr.IsBusy() {
 		t.Error("Manager should be busy with active session")
 	}
 
-	// 4. 進捗の更新
+	// 4. Update progress
 	sess.UpdateProgress("file1", 50)
 	if sess.Progress["file1"] != 50 {
 		t.Errorf("Progress not updated. Expected: 50, Got: %d", sess.Progress["file1"])
 	}
 
-	// 5. セッション削除
+	// 5. Delete session
 	mgr.DeleteSession(sess.ID)
 	if _, ok := mgr.GetSession(sess.ID); ok {
 		t.Error("Session should have been deleted")
@@ -110,7 +111,7 @@ func TestSessionTimeout(t *testing.T) {
 		t.Error("Manager should be busy initially")
 	}
 
-	// タイムアウトを待つ
+	// Wait for expiration
 	time.Sleep(100 * time.Millisecond)
 
 	if mgr.IsBusy() {
@@ -202,4 +203,93 @@ func TestNewUploadSession(t *testing.T) {
 			t.Errorf("Expected empty Progress map, got len %d", len(sess.Progress))
 		}
 	})
+}
+
+func TestUploadSession_Methods(t *testing.T) {
+	meta := protocol.FileMetadata{
+		ID:       "file-alpha",
+		FileName: "alpha.txt",
+		Size:     500,
+	}
+	sess := NewUploadSession("10.0.0.42", true, map[string]protocol.FileMetadata{meta.ID: meta})
+
+	// GetClientInfo
+	ip, verified := sess.GetClientInfo()
+	if ip != "10.0.0.42" || !verified {
+		t.Errorf("GetClientInfo() = (%q, %v), want ('10.0.0.42', true)", ip, verified)
+	}
+
+	// GetFileTokenAndMeta - Existing
+	token, retrievedMeta, ok := sess.GetFileTokenAndMeta(meta.ID)
+	if !ok || token == "" || retrievedMeta.FileName != "alpha.txt" {
+		t.Errorf("GetFileTokenAndMeta(valid) failed: token=%q, ok=%v, meta=%+v", token, ok, retrievedMeta)
+	}
+
+	// GetFileTokenAndMeta - Non-existent
+	_, _, okNotFound := sess.GetFileTokenAndMeta("non-existent-id")
+	if okNotFound {
+		t.Errorf("GetFileTokenAndMeta(non-existent) expected false, got true")
+	}
+
+	// Context & Cancel
+	if sess.IsCanceled() {
+		t.Errorf("expected IsCanceled() = false initially")
+	}
+	if sess.Context() == nil {
+		t.Errorf("expected non-nil Context()")
+	}
+
+	sess.Cancel()
+	if !sess.IsCanceled() {
+		t.Errorf("expected IsCanceled() = true after Cancel()")
+	}
+}
+
+func TestSessionManager_Close(t *testing.T) {
+	mgr := NewSessionManager(100 * time.Millisecond)
+	// Multiple Close calls should not panic
+	mgr.Close()
+	mgr.Close()
+}
+
+func TestSessionManager_ConcurrentAccess(t *testing.T) {
+	mgr := NewSessionManager(500 * time.Millisecond)
+	defer mgr.Close()
+
+	const numGoroutines = 20
+	var wg sync.WaitGroup
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+
+			meta := protocol.FileMetadata{
+				ID:       "concurrent-file",
+				FileName: "test.dat",
+				Size:     1000,
+			}
+			sess := mgr.CreateSession("127.0.0.1", true, map[string]protocol.FileMetadata{meta.ID: meta})
+			if sess == nil {
+				t.Errorf("goroutine %d failed to create session", idx)
+				return
+			}
+
+			_ = mgr.IsBusy()
+
+			sess.UpdateProgress("concurrent-file", 500)
+
+			retrieved, ok := mgr.GetSession(sess.ID)
+			if !ok || retrieved == nil {
+				t.Errorf("goroutine %d failed to get session %s", idx, sess.ID)
+			}
+
+			sess.UpdateProgress("concurrent-file", 1000)
+			_ = sess.IsCompleted()
+
+			mgr.DeleteSession(sess.ID)
+		}(i)
+	}
+
+	wg.Wait()
 }
