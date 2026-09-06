@@ -72,6 +72,81 @@ func createTempSharedFile(t *testing.T, dir, filename, content string) (ShareFil
 }
 
 // TestWebShare_WebUI はブラウザ向け Web UI (HTML) の返却テストを行います。
+// TestNewServer は NewServer 関数のフィールド初期化をテストします。
+func TestNewServer(t *testing.T) {
+	tlsCert, _, _, _, err := crypto.GenerateSelfSignedCert()
+	if err != nil {
+		t.Fatalf("failed to generate TLS cert: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		myDevice  protocol.Device
+		saveDir   string
+		pin       string
+		strictTLS bool
+	}{
+		{
+			name: "Standard initialization",
+			myDevice: protocol.Device{
+				Alias:       "Device 1",
+				DeviceModel: "Model A",
+				DeviceType:  "mobile",
+				Fingerprint: "fp1",
+				Port:        53317,
+				Protocol:    "https",
+				Download:    true,
+			},
+			saveDir:   "/tmp/save1",
+			pin:       "1234",
+			strictTLS: true,
+		},
+		{
+			name: "Initialization with empty PIN and strictTLS false",
+			myDevice: protocol.Device{
+				Alias:       "Device 2",
+				DeviceModel: "Model B",
+				DeviceType:  "desktop",
+				Fingerprint: "fp2",
+				Port:        53318,
+				Protocol:    "http",
+				Download:    false,
+			},
+			saveDir:   "/tmp/save2",
+			pin:       "",
+			strictTLS: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewServer(tt.myDevice, tlsCert, tt.saveDir, tt.pin, tt.strictTLS)
+
+			if s == nil {
+				t.Fatal("expected non-nil Server")
+			}
+			if s.myDevice != tt.myDevice {
+				t.Errorf("expected myDevice %+v, got %+v", tt.myDevice, s.myDevice)
+			}
+			if len(s.tlsCert.Certificate) != len(tlsCert.Certificate) {
+				t.Errorf("expected tlsCert len %d, got %d", len(tlsCert.Certificate), len(s.tlsCert.Certificate))
+			}
+			if s.saveDir != tt.saveDir {
+				t.Errorf("expected saveDir %s, got %s", tt.saveDir, s.saveDir)
+			}
+			if s.pin != tt.pin {
+				t.Errorf("expected pin %s, got %s", tt.pin, s.pin)
+			}
+			if s.strictTLS != tt.strictTLS {
+				t.Errorf("expected strictTLS %v, got %v", tt.strictTLS, s.strictTLS)
+			}
+			if s.sessionMgr == nil {
+				t.Error("expected sessionMgr to be initialized, got nil")
+			}
+		})
+	}
+}
+
 func TestWebShare_WebUI(t *testing.T) {
 	s, cleanupServer := setupTestServer(t)
 	defer cleanupServer()
