@@ -575,3 +575,86 @@ func TestHandleUpload_ChecksumValidation(t *testing.T) {
 		})
 	}
 }
+
+// TestPathTraversal Prevention tests that filenames with path traversal elements do not escape s.saveDir.
+func TestPathTraversalPrevention(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	// Parent directory of saveDir
+	parentDir := filepath.Dir(s.saveDir)
+	targetFileNameInParent := "traversal_test_file.txt"
+	targetFilePathInParent := filepath.Join(parentDir, targetFileNameInParent)
+
+	// Clean up if created
+	defer os.Remove(targetFilePathInParent)
+
+	// Malicious filename attempting to write to parent directory
+	traversalFileName := "../" + targetFileNameInParent
+
+	fileID := "traversal-file-id"
+	content := "traversal test content"
+
+	meta := protocol.FileMetadata{
+		ID:       fileID,
+		FileName: traversalFileName,
+		Size:     int64(len(content)),
+		FileType: "text/plain",
+	}
+	filesMeta := map[string]protocol.FileMetadata{meta.ID: meta}
+
+	// Test 1: prepare-upload duplicate check with path traversal filename
+	// Create the file in parent directory first to test if duplicate check accesses it
+	err := os.WriteFile(targetFilePathInParent, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to create file in parent dir: %v", err)
+	}
+
+	reqBody := protocol.PrepareUploadRequest{
+		Info:  s.myDevice,
+		Files: map[string]protocol.FileMetadata{"file1": meta},
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	reqPrep := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/prepare-upload", strings.NewReader(string(bodyBytes)))
+	wPrep := httptest.NewRecorder()
+	s.handlePrepareUpload(wPrep, reqPrep)
+
+	// Since targetFilePathInParent is in parentDir, not saveDir, duplicate check must NOT find it (should return 200 OK with session, not 204 No Content)
+	if wPrep.Result().StatusCode == http.StatusNoContent {
+		t.Errorf("path traversal allowed duplicate check to access outside saveDir")
+	}
+
+	// Remove target file in parent dir to test upload creation
+	_ = os.Remove(targetFilePathInParent)
+
+	// Test 2: upload with path traversal filename
+	sessionObj := s.sessionMgr.CreateSession("127.0.0.1", false, filesMeta)
+	token, _, _ := sessionObj.GetFileTokenAndMeta(fileID)
+
+	query := url.Values{}
+	query.Set("sessionId", sessionObj.ID)
+	query.Set("fileId", fileID)
+	query.Set("token", token)
+
+	reqUpload := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/upload?"+query.Encode(), strings.NewReader(content))
+	reqUpload.RemoteAddr = "127.0.0.1:12345"
+	wUpload := httptest.NewRecorder()
+
+	s.handleUpload(wUpload, reqUpload)
+
+	if wUpload.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected upload status 200 OK, got %d", wUpload.Result().StatusCode)
+	}
+
+	// Check file was NOT created in parent directory
+	if _, err := os.Stat(targetFilePathInParent); err == nil {
+		t.Errorf("path traversal vulnerability! File was written outside saveDir to %s", targetFilePathInParent)
+	}
+
+	// Check file WAS created inside saveDir with sanitized name
+	sanitizedPath := filepath.Join(s.saveDir, targetFileNameInParent)
+	if _, err := os.Stat(sanitizedPath); os.IsNotExist(err) {
+		t.Errorf("expected file to be saved in saveDir as %s, but not found", sanitizedPath)
+	}
+}

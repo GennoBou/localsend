@@ -211,7 +211,8 @@ func (s *Server) handlePrepareUpload(w http.ResponseWriter, r *http.Request) {
 	// Verify if all files already exist in the save directory (same name and size)
 	allDuplicate := true
 	for _, f := range req.Files {
-		targetPath := filepath.Join(s.saveDir, f.FileName)
+		cleanName := filepath.Base(f.FileName)
+		targetPath := filepath.Join(s.saveDir, cleanName)
 		info, err := os.Stat(targetPath)
 		if err != nil {
 			allDuplicate = false
@@ -431,9 +432,10 @@ func (s *Server) checkClientCertificate(r *http.Request) (string, bool) {
 
 // getUniquePath returns a unique path in the save directory that does not conflict with existing filenames.
 func getUniquePath(dir, filename string) string {
-	ext := filepath.Ext(filename)
-	base := filename[:len(filename)-len(ext)]
-	path := filepath.Join(dir, filename)
+	cleanName := filepath.Base(filename)
+	ext := filepath.Ext(cleanName)
+	base := cleanName[:len(cleanName)-len(ext)]
+	path := filepath.Join(dir, cleanName)
 
 	i := 1
 	for {
