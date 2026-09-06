@@ -101,66 +101,83 @@ func StartMulticastListener(ctx context.Context, myDevice protocol.Device, onDis
 		return fmt.Errorf("failed to get network interfaces: %w", err)
 	}
 
-	var listeners []*net.UDPConn
-	var successCount int
 	var lastReceived sync.Map // key: fingerprint+port, value: time.Time
-
 	handleConn := func(conn *net.UDPConn) {
-		buf := make([]byte, 65535)
-		for {
-			n, src, err := conn.ReadFrom(buf)
-			if err != nil {
-				// E.g., when the connection is closed
-				return
-			}
-
-			var msg protocol.AnnounceMessage
-			if err := json.Unmarshal(buf[:n], &msg); err != nil {
-				continue
-			}
-
-			// Ignore self-echo (packets sent from oneself) unless it comes from a
-			// different process (different port) on the same machine
-			if msg.Fingerprint == myDevice.Fingerprint && msg.Port == myDevice.Port {
-				continue
-			}
-
-			// Deduplication: Ignore if duplicate packets (same fingerprint and port)
-			// from the same device are received within a short period (2 seconds)
-			dedupKey := fmt.Sprintf("%s:%d", msg.Fingerprint, msg.Port)
-			if lastTimeVal, ok := lastReceived.Load(dedupKey); ok {
-				if lastTime, ok := lastTimeVal.(time.Time); ok && time.Since(lastTime) < 2*time.Second {
-					continue
-				}
-			}
-			lastReceived.Store(dedupKey, time.Now())
-
-			udpAddr, ok := src.(*net.UDPAddr)
-			if !ok {
-				continue
-			}
-
-			// Store the source IP address in the device info
-			msg.IP = udpAddr.IP.String()
-
-			onDiscover(msg.Device)
-
-			// Respond (register back) if the partner requests an announce response,
-			// skipping if the partner's port is 0 (not listening)
-			if msg.Announce && msg.Port > 0 {
-				onAnnounce(msg.Device)
-			}
-		}
+		readMulticastLoop(conn, myDevice, &lastReceived, onDiscover, onAnnounce)
 	}
 
 	// Use a custom multicast listener on Windows
 	if runtime.GOOS == "windows" {
-		err := startWindowsMulticastListener(ctx, addr, interfaces, handleConn)
-		if err != nil {
-			return err
-		}
-		return nil
+		return startWindowsMulticastListener(ctx, addr, interfaces, handleConn)
 	}
+
+	listeners, err := setupMulticastListeners(addr, interfaces, handleConn)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		<-ctx.Done()
+		for _, conn := range listeners {
+			_ = conn.Close()
+		}
+	}()
+
+	return nil
+}
+
+// readMulticastLoop processes incoming multicast messages from a connection.
+func readMulticastLoop(conn *net.UDPConn, myDevice protocol.Device, lastReceived *sync.Map, onDiscover func(protocol.Device), onAnnounce func(protocol.Device)) {
+	buf := make([]byte, 65535)
+	for {
+		n, src, err := conn.ReadFrom(buf)
+		if err != nil {
+			// E.g., when the connection is closed
+			return
+		}
+
+		var msg protocol.AnnounceMessage
+		if err := json.Unmarshal(buf[:n], &msg); err != nil {
+			continue
+		}
+
+		// Ignore self-echo (packets sent from oneself) unless it comes from a
+		// different process (different port) on the same machine
+		if msg.Fingerprint == myDevice.Fingerprint && msg.Port == myDevice.Port {
+			continue
+		}
+
+		// Deduplication: Ignore if duplicate packets (same fingerprint and port)
+		// from the same device are received within a short period (2 seconds)
+		dedupKey := fmt.Sprintf("%s:%d", msg.Fingerprint, msg.Port)
+		if lastTimeVal, ok := lastReceived.Load(dedupKey); ok {
+			if lastTime, ok := lastTimeVal.(time.Time); ok && time.Since(lastTime) < 2*time.Second {
+				continue
+			}
+		}
+		lastReceived.Store(dedupKey, time.Now())
+
+		udpAddr, ok := src.(*net.UDPAddr)
+		if !ok {
+			continue
+		}
+
+		// Store the source IP address in the device info
+		msg.IP = udpAddr.IP.String()
+
+		onDiscover(msg.Device)
+
+		// Respond (register back) if the partner requests an announce response,
+		// skipping if the partner's port is 0 (not listening)
+		if msg.Announce && msg.Port > 0 {
+			onAnnounce(msg.Device)
+		}
+	}
+}
+
+// setupMulticastListeners sets up multicast UDP listeners on available network interfaces and wildcard interface.
+func setupMulticastListeners(addr *net.UDPAddr, interfaces []net.Interface, handleConn func(*net.UDPConn)) ([]*net.UDPConn, error) {
+	var listeners []*net.UDPConn
 
 	for _, iface := range interfaces {
 		// Target only active and multicast-capable interfaces (excluding loopback)
@@ -192,7 +209,6 @@ func StartMulticastListener(ctx context.Context, myDevice protocol.Device, onDis
 			continue
 		}
 		listeners = append(listeners, conn)
-		successCount++
 		go handleConn(conn)
 	}
 
@@ -201,23 +217,15 @@ func StartMulticastListener(ctx context.Context, myDevice protocol.Device, onDis
 	nilConn, err := net.ListenMulticastUDP("udp4", nil, addr)
 	if err == nil {
 		listeners = append(listeners, nilConn)
-		successCount++
 		go handleConn(nilConn)
 	}
 
 	// Return an error if failed to bind to any interface
-	if successCount == 0 {
-		return fmt.Errorf("failed to listen multicast on any interface")
+	if len(listeners) == 0 {
+		return nil, fmt.Errorf("failed to listen multicast on any interface")
 	}
 
-	go func() {
-		<-ctx.Done()
-		for _, conn := range listeners {
-			_ = conn.Close()
-		}
-	}()
-
-	return nil
+	return listeners, nil
 }
 
 // ScanLegacy scans the local C-class subnet in parallel using HTTP for environments where multicast is not available.
