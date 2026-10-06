@@ -1,6 +1,7 @@
 package session
 
 import (
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -219,18 +220,6 @@ func TestUploadSession_Methods(t *testing.T) {
 		t.Errorf("GetClientInfo() = (%q, %v), want ('10.0.0.42', true)", ip, verified)
 	}
 
-	// GetFileTokenAndMeta - Existing
-	token, retrievedMeta, ok := sess.GetFileTokenAndMeta(meta.ID)
-	if !ok || token == "" || retrievedMeta.FileName != "alpha.txt" {
-		t.Errorf("GetFileTokenAndMeta(valid) failed: token=%q, ok=%v, meta=%+v", token, ok, retrievedMeta)
-	}
-
-	// GetFileTokenAndMeta - Non-existent
-	_, _, okNotFound := sess.GetFileTokenAndMeta("non-existent-id")
-	if okNotFound {
-		t.Errorf("GetFileTokenAndMeta(non-existent) expected false, got true")
-	}
-
 	// Context & Cancel
 	if sess.IsCanceled() {
 		t.Errorf("expected IsCanceled() = false initially")
@@ -243,6 +232,129 @@ func TestUploadSession_Methods(t *testing.T) {
 	if !sess.IsCanceled() {
 		t.Errorf("expected IsCanceled() = true after Cancel()")
 	}
+}
+
+func TestUploadSession_GetFileTokenAndMeta(t *testing.T) {
+	meta1 := protocol.FileMetadata{
+		ID:       "file-1",
+		FileName: "doc.pdf",
+		FileType: "application/pdf",
+		Size:     1024,
+	}
+	meta2 := protocol.FileMetadata{
+		ID:       "file-2",
+		FileName: "image.png",
+		FileType: "image/png",
+		Size:     2048,
+	}
+
+	sess := NewUploadSession("192.168.1.1", true, map[string]protocol.FileMetadata{
+		meta1.ID: meta1,
+		meta2.ID: meta2,
+	})
+
+	t.Run("table driven test cases", func(t *testing.T) {
+		tests := []struct {
+			name        string
+			fileID      string
+			setupFunc   func(s *UploadSession)
+			wantFound   bool
+			wantMeta    protocol.FileMetadata
+			checkToken  bool
+		}{
+			{
+				name:       "existing file ID 1",
+				fileID:     meta1.ID,
+				wantFound:  true,
+				wantMeta:   meta1,
+				checkToken: true,
+			},
+			{
+				name:       "existing file ID 2",
+				fileID:     meta2.ID,
+				wantFound:  true,
+				wantMeta:   meta2,
+				checkToken: true,
+			},
+			{
+				name:       "non-existent file ID",
+				fileID:     "unknown-file-id",
+				wantFound:  false,
+				wantMeta:   protocol.FileMetadata{},
+				checkToken: false,
+			},
+			{
+				name:   "missing in Files map only",
+				fileID: "missing-token-id",
+				setupFunc: func(s *UploadSession) {
+					s.FilesMetadata["missing-token-id"] = protocol.FileMetadata{ID: "missing-token-id", FileName: "orphan.txt"}
+				},
+				wantFound:  false,
+				wantMeta:   protocol.FileMetadata{ID: "missing-token-id", FileName: "orphan.txt"},
+				checkToken: false,
+			},
+			{
+				name:   "missing in FilesMetadata map only",
+				fileID: "missing-meta-id",
+				setupFunc: func(s *UploadSession) {
+					s.Files["missing-meta-id"] = "some-token"
+				},
+				wantFound:  false,
+				wantMeta:   protocol.FileMetadata{},
+				checkToken: false,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if tt.setupFunc != nil {
+					tt.setupFunc(sess)
+				}
+
+				token, meta, ok := sess.GetFileTokenAndMeta(tt.fileID)
+
+				if ok != tt.wantFound {
+					t.Errorf("GetFileTokenAndMeta(%q) ok = %v, want %v", tt.fileID, ok, tt.wantFound)
+				}
+
+				if tt.checkToken {
+					expectedToken := sess.Files[tt.fileID]
+					if token != expectedToken {
+						t.Errorf("GetFileTokenAndMeta(%q) token = %q, want %q", tt.fileID, token, expectedToken)
+					}
+				}
+
+				if !reflect.DeepEqual(meta, tt.wantMeta) {
+					t.Errorf("GetFileTokenAndMeta(%q) meta = %+v, want %+v", tt.fileID, meta, tt.wantMeta)
+				}
+			})
+		}
+	})
+
+	t.Run("concurrent read and write", func(t *testing.T) {
+		const numGoroutines = 50
+		var wg sync.WaitGroup
+
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 100; j++ {
+					_, _, _ = sess.GetFileTokenAndMeta(meta1.ID)
+					_, _, _ = sess.GetFileTokenAndMeta("non-existent-id")
+				}
+			}()
+			go func(idx int) {
+				defer wg.Done()
+				for j := 0; j < 100; j++ {
+					sess.UpdateProgress(meta1.ID, int64(j*10))
+					sess.Touch()
+				}
+			}(i)
+		}
+
+		wg.Wait()
+	})
 }
 
 func TestSessionManager_Close(t *testing.T) {
