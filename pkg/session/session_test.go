@@ -247,8 +247,27 @@ func TestUploadSession_Methods(t *testing.T) {
 
 func TestSessionManager_Close(t *testing.T) {
 	mgr := NewSessionManager(100 * time.Millisecond)
-	// Multiple Close calls should not panic
+
+	select {
+	case <-mgr.ctx.Done():
+		t.Fatal("expected context to be active initially")
+	default:
+	}
+
 	mgr.Close()
+
+	select {
+	case <-mgr.ctx.Done():
+		// Context was successfully canceled
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected context to be canceled after Close()")
+	}
+
+	if mgr.ctx.Err() == nil {
+		t.Error("expected non-nil context error after Close()")
+	}
+
+	// Multiple Close calls should not panic
 	mgr.Close()
 }
 
