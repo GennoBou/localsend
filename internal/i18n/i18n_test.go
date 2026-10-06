@@ -45,6 +45,79 @@ func TestI18nTranslations(t *testing.T) {
 	}
 }
 
+func TestSetLanguage(t *testing.T) {
+	origLang := currentLang
+	t.Cleanup(func() {
+		currentLang = origLang
+	})
+
+	tests := []struct {
+		name          string
+		initialLang   string
+		inputLang     string
+		expectedLang  string
+	}{
+		{
+			name:         "Set valid language 'en'",
+			initialLang:  "ja",
+			inputLang:    "en",
+			expectedLang: "en",
+		},
+		{
+			name:         "Set valid language 'ja'",
+			initialLang:  "en",
+			inputLang:    "ja",
+			expectedLang: "ja",
+		},
+		{
+			name:         "Set uppercase 'EN'",
+			initialLang:  "ja",
+			inputLang:    "EN",
+			expectedLang: "en",
+		},
+		{
+			name:         "Set uppercase 'JA'",
+			initialLang:  "en",
+			inputLang:    "JA",
+			expectedLang: "ja",
+		},
+		{
+			name:         "Set mixed case 'Ja'",
+			initialLang:  "en",
+			inputLang:    "Ja",
+			expectedLang: "ja",
+		},
+		{
+			name:         "Unsupported language 'fr' keeps current language",
+			initialLang:  "en",
+			inputLang:    "fr",
+			expectedLang: "en",
+		},
+		{
+			name:         "Unsupported empty string keeps current language",
+			initialLang:  "ja",
+			inputLang:    "",
+			expectedLang: "ja",
+		},
+		{
+			name:         "Unsupported language '123' keeps current language",
+			initialLang:  "en",
+			inputLang:    "123",
+			expectedLang: "en",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			currentLang = tt.initialLang
+			SetLanguage(tt.inputLang)
+			if got := GetLanguage(); got != tt.expectedLang {
+				t.Errorf("SetLanguage(%q) with initial %q = %q; want %q", tt.inputLang, tt.initialLang, got, tt.expectedLang)
+			}
+		})
+	}
+}
+
 func TestI18nFallback(t *testing.T) {
 	SetLanguage("ja")
 
