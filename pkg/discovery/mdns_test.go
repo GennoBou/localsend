@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -120,4 +121,58 @@ func TestDiscoveryModeInitializations(t *testing.T) {
 			advertiser.Close()
 		})
 	}
+}
+
+type mockCloser struct {
+	closeCount int
+	err        error
+}
+
+func (m *mockCloser) Close() error {
+	m.closeCount++
+	return m.err
+}
+
+func TestAdvertisingCloser_Close(t *testing.T) {
+	t.Run("nil mdnsCloser", func(t *testing.T) {
+		adv := &AdvertisingCloser{}
+		if err := adv.Close(); err != nil {
+			t.Errorf("expected nil error, got %v", err)
+		}
+	})
+
+	t.Run("successful close", func(t *testing.T) {
+		mock := &mockCloser{}
+		adv := &AdvertisingCloser{mdnsCloser: mock}
+		if err := adv.Close(); err != nil {
+			t.Errorf("expected nil error, got %v", err)
+		}
+		if mock.closeCount != 1 {
+			t.Errorf("expected closeCount to be 1, got %d", mock.closeCount)
+		}
+	})
+
+	t.Run("error propagation", func(t *testing.T) {
+		expectedErr := errors.New("mock error")
+		mock := &mockCloser{err: expectedErr}
+		adv := &AdvertisingCloser{mdnsCloser: mock}
+		err := adv.Close()
+		if !errors.Is(err, expectedErr) {
+			t.Errorf("expected %v, got %v", expectedErr, err)
+		}
+		if mock.closeCount != 1 {
+			t.Errorf("expected closeCount to be 1, got %d", mock.closeCount)
+		}
+	})
+
+	t.Run("multiple close calls only invoke inner closer once", func(t *testing.T) {
+		mock := &mockCloser{}
+		adv := &AdvertisingCloser{mdnsCloser: mock}
+		for i := 0; i < 3; i++ {
+			_ = adv.Close()
+		}
+		if mock.closeCount != 1 {
+			t.Errorf("expected closeCount to be 1 after multiple Close calls, got %d", mock.closeCount)
+		}
+	})
 }
