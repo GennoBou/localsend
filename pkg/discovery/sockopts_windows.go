@@ -83,7 +83,7 @@ func startWindowsMulticastListener(ctx context.Context, addr *net.UDPAddr, inter
 	}
 
 	// Get active private IPv4 addresses
-	var ips []net.IP
+	ips := make([]net.IP, 0, len(interfaces))
 	for _, iface := range interfaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagMulticast == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
