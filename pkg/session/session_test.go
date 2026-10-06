@@ -245,6 +245,74 @@ func TestUploadSession_Methods(t *testing.T) {
 	}
 }
 
+func TestSessionManager_GetSession(t *testing.T) {
+	mgr := NewSessionManager(5 * time.Minute)
+	defer mgr.Close()
+
+	files := map[string]protocol.FileMetadata{
+		"file1": {ID: "file1", FileName: "test.txt", Size: 100},
+	}
+
+	t.Run("existing session", func(t *testing.T) {
+		created := mgr.CreateSession("192.168.1.10", true, files)
+		if created == nil {
+			t.Fatal("Expected created session to be non-nil")
+		}
+
+		sess, ok := mgr.GetSession(created.ID)
+		if !ok {
+			t.Fatalf("Expected GetSession to return true for existing ID %s", created.ID)
+		}
+		if sess == nil {
+			t.Fatal("Expected non-nil session returned from GetSession")
+		}
+		if sess.ID != created.ID {
+			t.Errorf("Expected session ID %s, got %s", created.ID, sess.ID)
+		}
+		if sess.ClientIP != "192.168.1.10" {
+			t.Errorf("Expected ClientIP %s, got %s", "192.168.1.10", sess.ClientIP)
+		}
+	})
+
+	t.Run("non-existent session", func(t *testing.T) {
+		sess, ok := mgr.GetSession("non-existent-session-id")
+		if ok {
+			t.Errorf("Expected GetSession to return false for non-existent ID")
+		}
+		if sess != nil {
+			t.Errorf("Expected GetSession to return nil session for non-existent ID, got %v", sess)
+		}
+	})
+
+	t.Run("updates LastAccess on touch", func(t *testing.T) {
+		created := mgr.CreateSession("192.168.1.20", false, files)
+		if created == nil {
+			t.Fatal("Expected created session to be non-nil")
+		}
+
+		pastTime := time.Now().Add(-10 * time.Minute)
+		created.mu.Lock()
+		created.LastAccess = pastTime
+		created.mu.Unlock()
+
+		before := time.Now()
+		sess, ok := mgr.GetSession(created.ID)
+		after := time.Now()
+
+		if !ok || sess == nil {
+			t.Fatalf("Expected GetSession to return true and valid session")
+		}
+
+		sess.mu.RLock()
+		lastAccess := sess.LastAccess
+		sess.mu.RUnlock()
+
+		if lastAccess.Before(before) || lastAccess.After(after) {
+			t.Errorf("Expected LastAccess to be updated between %v and %v, got %v", before, after, lastAccess)
+		}
+	})
+}
+
 func TestSessionManager_Close(t *testing.T) {
 	mgr := NewSessionManager(100 * time.Millisecond)
 	// Multiple Close calls should not panic
