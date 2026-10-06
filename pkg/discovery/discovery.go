@@ -239,13 +239,19 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 		Timeout:   500 * time.Millisecond, // Timeout for each host is 500ms
 	}
 
+	localIPMap := make(map[string]struct{}, len(localIPs))
+	for _, ip := range localIPs {
+		localIPMap[ip] = struct{}{}
+	}
+
 	// 1. Scan conflict ports (53317-53326) against own local IPs and loopback
 	// to discover other instances on the same host
 	targetIPs := append(localIPs, "127.0.0.1")
 	for _, ip := range targetIPs {
 		for port := protocol.DefaultPort; port <= protocol.DefaultPort+9; port++ {
 			// Skip scanning own IP and port to prevent self-scanning
-			isSelf := myDevice.Fingerprint != "" && port == myDevice.Port && (ip == "127.0.0.1" || isLocalIP(ip, localIPs))
+			_, isLocal := localIPMap[ip]
+			isSelf := myDevice.Fingerprint != "" && port == myDevice.Port && (ip == "127.0.0.1" || isLocal)
 			if isSelf {
 				continue
 			}
@@ -280,7 +286,7 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 		for i := 1; i <= 254; i++ {
 			targetIP := baseIP + strconv.Itoa(i)
 			// Skip own IP since it is covered in Step 1
-			if isLocalIP(targetIP, localIPs) {
+			if _, isLocal := localIPMap[targetIP]; isLocal {
 				continue
 			}
 
