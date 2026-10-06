@@ -1,8 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -804,6 +807,155 @@ func TestValidateUploadRequest(t *testing.T) {
 			t.Errorf("expected 'IP address mismatch', got '%s'", errMsg)
 		}
 	})
+}
+
+// getFreePort returns an available TCP port for testing.
+func getFreePort(t *testing.T) int {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on free port: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// TestStartDownloadServer_Success tests starting, interacting with, and stopping the download server.
+func TestStartDownloadServer_Success(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	sf, cleanupFile := createTempSharedFile(t, s.saveDir, "dl_test.txt", "download server test content")
+	defer cleanupFile()
+
+	port := getFreePort(t)
+
+	err := s.StartDownloadServer(port, []ShareFile{sf})
+	if err != nil {
+		t.Fatalf("failed to start download server: %v", err)
+	}
+
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	// 1. Verify GET / (Web UI)
+	resp, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("failed to request Web UI: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200 OK from Web UI, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "dl_test.txt") {
+		t.Errorf("expected Web UI body to contain 'dl_test.txt', got %s", string(body))
+	}
+
+	// 2. Verify POST /api/localsend/v2/prepare-download
+	respPrep, err := http.Post(baseURL+"/api/localsend/v2/prepare-download", "application/json", nil)
+	if err != nil {
+		t.Fatalf("failed to request prepare-download: %v", err)
+	}
+	var prepResp protocol.PrepareDownloadResponse
+	err = json.NewDecoder(respPrep.Body).Decode(&prepResp)
+	respPrep.Body.Close()
+
+	if err != nil {
+		t.Fatalf("failed to decode prepare-download response: %v", err)
+	}
+	if prepResp.SessionID == "" {
+		t.Error("expected non-empty SessionID in prepare-download response")
+	}
+
+	// 3. Stop download server
+	s.StopDownloadServer(context.Background())
+
+	s.downloadMu.Lock()
+	if s.downloadServer != nil {
+		t.Error("expected downloadServer to be nil after StopDownloadServer")
+	}
+	if s.sharedFiles != nil {
+		t.Error("expected sharedFiles to be nil after StopDownloadServer")
+	}
+	if s.downloadSession != "" {
+		t.Error("expected downloadSession to be empty after StopDownloadServer")
+	}
+	s.downloadMu.Unlock()
+}
+
+// TestStartDownloadServer_AlreadyRunning tests that starting an already running download server returns an error.
+func TestStartDownloadServer_AlreadyRunning(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	sf, cleanupFile := createTempSharedFile(t, s.saveDir, "dl_test.txt", "content")
+	defer cleanupFile()
+
+	port1 := getFreePort(t)
+	err := s.StartDownloadServer(port1, []ShareFile{sf})
+	if err != nil {
+		t.Fatalf("failed to start download server: %v", err)
+	}
+	defer s.StopDownloadServer(context.Background())
+
+	port2 := getFreePort(t)
+	err2 := s.StartDownloadServer(port2, []ShareFile{sf})
+	if err2 == nil {
+		t.Fatal("expected error when starting download server twice, got nil")
+	}
+	if !strings.Contains(err2.Error(), "download server is already running") {
+		t.Errorf("expected 'download server is already running' error, got %v", err2)
+	}
+}
+
+// TestStartDownloadServer_ListenError tests that an invalid port produces a listen error.
+func TestStartDownloadServer_ListenError(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	sf, cleanupFile := createTempSharedFile(t, s.saveDir, "dl_test.txt", "content")
+	defer cleanupFile()
+
+	// Invalid port -1 causes net.Listen to fail
+	err := s.StartDownloadServer(-1, []ShareFile{sf})
+	if err == nil {
+		t.Fatal("expected error for invalid port -1, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to listen on port") {
+		t.Errorf("expected listener error, got %v", err)
+	}
+
+	s.downloadMu.Lock()
+	defer s.downloadMu.Unlock()
+	if s.downloadServer != nil {
+		t.Error("expected downloadServer to remain nil on listen error")
+	}
+}
+
+// TestServer_Shutdown_StopsDownloadServer tests that Server.Shutdown also stops the download server.
+func TestServer_Shutdown_StopsDownloadServer(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	sf, cleanupFile := createTempSharedFile(t, s.saveDir, "dl_test.txt", "content")
+	defer cleanupFile()
+
+	port := getFreePort(t)
+	err := s.StartDownloadServer(port, []ShareFile{sf})
+	if err != nil {
+		t.Fatalf("failed to start download server: %v", err)
+	}
+
+	err = s.Shutdown(context.Background())
+	if err != nil {
+		t.Fatalf("failed to shutdown server: %v", err)
+	}
+
+	s.downloadMu.Lock()
+	defer s.downloadMu.Unlock()
+	if s.downloadServer != nil {
+		t.Error("expected downloadServer to be nil after Server.Shutdown")
+	}
 }
 
 // TestSaveUploadedFile tests unit behavior of saveUploadedFile.

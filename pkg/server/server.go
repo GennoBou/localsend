@@ -497,9 +497,10 @@ func (s *Server) StartDownloadServer(port int, sharedFiles []ShareFile) error {
 	s.downloadServer = &http.Server{
 		Handler: mux,
 	}
+	srv := s.downloadServer
 
 	go func() {
-		_ = s.downloadServer.Serve(ln)
+		_ = srv.Serve(ln)
 	}()
 
 	return nil
