@@ -26,6 +26,44 @@ func BenchmarkUploadURLConstruction_Baseline(b *testing.B) {
 	}
 }
 
+func BenchmarkSendResultsAllocation_Unallocated(b *testing.B) {
+	fileCount := 100
+	files := make([]SendFileSource, fileCount)
+	for i := 0; i < fileCount; i++ {
+		files[i] = SendFileSource{ID: fmt.Sprintf("file-%d", i)}
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		var results []SendResult
+		for _, f := range files {
+			results = append(results, SendResult{FileID: f.ID, Err: nil})
+		}
+		_ = results
+	}
+}
+
+func BenchmarkSendResultsAllocation_Preallocated(b *testing.B) {
+	fileCount := 100
+	files := make([]SendFileSource, fileCount)
+	for i := 0; i < fileCount; i++ {
+		files[i] = SendFileSource{ID: fmt.Sprintf("file-%d", i)}
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		results := make([]SendResult, 0, len(files))
+		for _, f := range files {
+			results = append(results, SendResult{FileID: f.ID, Err: nil})
+		}
+		_ = results
+	}
+}
+
 func BenchmarkUploadURLConstruction_Optimized(b *testing.B) {
 	target := &protocol.Device{
 		Protocol: "http",

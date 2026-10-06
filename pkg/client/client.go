@@ -222,7 +222,7 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 	}
 
 	sessionID := prepResp.SessionID
-	var results []SendResult
+	results := make([]SendResult, 0, len(files))
 
 	// Helper function to cancel the session
 	cancelSession := func() {
