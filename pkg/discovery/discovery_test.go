@@ -327,6 +327,16 @@ func TestScanLegacy(t *testing.T) {
 	ScanLegacy(ctx, myDevice, onDiscover)
 }
 
+func BenchmarkGetLocalIPs(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, err := GetLocalIPs()
+		if err != nil {
+			b.Fatalf("GetLocalIPs failed: %v", err)
+		}
+	}
+}
+
 func TestScanHost_Errors(t *testing.T) {
 	myDevice := protocol.Device{
 		Alias:       "Scanner",

@@ -368,12 +368,12 @@ func isLocalIP(ip string, localIPs []string) bool {
 
 // GetLocalIPs returns a list of private IPv4 addresses from active interfaces, excluding loopback.
 func GetLocalIPs() ([]string, error) {
-	var ips []string
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get interface addresses: %w", err)
 	}
 
+	ips := make([]string, 0, len(addrs))
 	for _, addr := range addrs {
 		ipNet, ok := addr.(*net.IPNet)
 		if ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {
