@@ -245,6 +245,44 @@ func TestUploadSession_Methods(t *testing.T) {
 	}
 }
 
+func TestUploadSession_Touch(t *testing.T) {
+	t.Run("updates LastAccess time", func(t *testing.T) {
+		sess := NewUploadSession("127.0.0.1", true, nil)
+		initialLastAccess := sess.LastAccess
+
+		// Sleep briefly to ensure time difference
+		time.Sleep(10 * time.Millisecond)
+
+		beforeTouch := time.Now()
+		sess.Touch()
+		afterTouch := time.Now()
+
+		if !sess.LastAccess.After(initialLastAccess) {
+			t.Errorf("Expected LastAccess to be updated after initial %v, got %v", initialLastAccess, sess.LastAccess)
+		}
+
+		if sess.LastAccess.Before(beforeTouch) || sess.LastAccess.After(afterTouch) {
+			t.Errorf("Expected LastAccess to be between %v and %v, got %v", beforeTouch, afterTouch, sess.LastAccess)
+		}
+	})
+
+	t.Run("thread-safe concurrent updates", func(t *testing.T) {
+		sess := NewUploadSession("127.0.0.1", true, nil)
+		const numGoroutines = 20
+		var wg sync.WaitGroup
+
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sess.Touch()
+			}()
+		}
+
+		wg.Wait()
+	})
+}
+
 func TestSessionManager_Close(t *testing.T) {
 	mgr := NewSessionManager(100 * time.Millisecond)
 	// Multiple Close calls should not panic
