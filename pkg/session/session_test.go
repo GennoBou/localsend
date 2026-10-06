@@ -432,3 +432,197 @@ func TestSessionManager_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestSessionManager_CreateSession(t *testing.T) {
+	t.Run("creates and stores session successfully", func(t *testing.T) {
+		mgr := NewSessionManager(5 * time.Minute)
+		defer mgr.Close()
+
+		clientIP := "192.168.1.10"
+		clientVerified := true
+		filesMeta := map[string]protocol.FileMetadata{
+			"f1": {ID: "f1", FileName: "doc.txt", Size: 100},
+		}
+
+		sess := mgr.CreateSession(clientIP, clientVerified, filesMeta)
+		if sess == nil {
+			t.Fatal("Expected non-nil UploadSession")
+		}
+
+		if sess.ClientIP != clientIP {
+			t.Errorf("Expected ClientIP %q, got %q", clientIP, sess.ClientIP)
+		}
+		if sess.ClientVerified != clientVerified {
+			t.Errorf("Expected ClientVerified %v, got %v", clientVerified, sess.ClientVerified)
+		}
+
+		retrieved, ok := mgr.GetSession(sess.ID)
+		if !ok {
+			t.Fatalf("Expected session %s to be stored in manager", sess.ID)
+		}
+		if retrieved != sess {
+			t.Errorf("Expected retrieved session pointer %v, got %v", sess, retrieved)
+		}
+	})
+
+	t.Run("creates multiple unique sessions", func(t *testing.T) {
+		mgr := NewSessionManager(5 * time.Minute)
+		defer mgr.Close()
+
+		sess1 := mgr.CreateSession("10.0.0.1", true, nil)
+		sess2 := mgr.CreateSession("10.0.0.2", false, nil)
+
+		if sess1.ID == sess2.ID {
+			t.Errorf("Expected unique session IDs, got identical ID: %s", sess1.ID)
+		}
+
+		retrieved1, ok1 := mgr.GetSession(sess1.ID)
+		retrieved2, ok2 := mgr.GetSession(sess2.ID)
+
+		if !ok1 || retrieved1.ID != sess1.ID {
+			t.Errorf("Failed to retrieve sess1 from manager")
+		}
+		if !ok2 || retrieved2.ID != sess2.ID {
+			t.Errorf("Failed to retrieve sess2 from manager")
+		}
+	})
+
+	t.Run("creates session with empty metadata", func(t *testing.T) {
+		mgr := NewSessionManager(5 * time.Minute)
+		defer mgr.Close()
+
+		emptyMeta := map[string]protocol.FileMetadata{}
+		sess := mgr.CreateSession("127.0.0.1", false, emptyMeta)
+
+		if sess == nil {
+			t.Fatal("Expected non-nil UploadSession with empty metadata")
+		}
+
+		if len(sess.FilesMetadata) != 0 {
+			t.Errorf("Expected empty FilesMetadata, got %d entries", len(sess.FilesMetadata))
+		}
+
+		_, ok := mgr.GetSession(sess.ID)
+		if !ok {
+			t.Errorf("Expected session with empty metadata to be stored in manager")
+		}
+	})
+}
+
+func TestSessionManager_GetSession(t *testing.T) {
+	mgr := NewSessionManager(5 * time.Minute)
+	defer mgr.Close()
+
+	files := map[string]protocol.FileMetadata{
+		"file1": {ID: "file1", FileName: "test.txt", Size: 100},
+	}
+
+	t.Run("existing session", func(t *testing.T) {
+		created := mgr.CreateSession("192.168.1.10", true, files)
+		if created == nil {
+			t.Fatal("Expected created session to be non-nil")
+		}
+
+		sess, ok := mgr.GetSession(created.ID)
+		if !ok {
+			t.Fatalf("Expected GetSession to return true for existing ID %s", created.ID)
+		}
+		if sess == nil {
+			t.Fatal("Expected non-nil session returned from GetSession")
+		}
+		if sess.ID != created.ID {
+			t.Errorf("Expected session ID %s, got %s", created.ID, sess.ID)
+		}
+		if sess.ClientIP != "192.168.1.10" {
+			t.Errorf("Expected ClientIP %s, got %s", "192.168.1.10", sess.ClientIP)
+		}
+	})
+
+	t.Run("non-existent session", func(t *testing.T) {
+		sess, ok := mgr.GetSession("non-existent-session-id")
+		if ok {
+			t.Errorf("Expected GetSession to return false for non-existent ID")
+		}
+		if sess != nil {
+			t.Errorf("Expected GetSession to return nil session for non-existent ID, got %v", sess)
+		}
+	})
+
+	t.Run("updates LastAccess on touch", func(t *testing.T) {
+		created := mgr.CreateSession("192.168.1.20", false, files)
+		if created == nil {
+			t.Fatal("Expected created session to be non-nil")
+		}
+
+		pastTime := time.Now().Add(-10 * time.Minute)
+		created.mu.Lock()
+		created.LastAccess = pastTime
+		created.mu.Unlock()
+
+		before := time.Now()
+		sess, ok := mgr.GetSession(created.ID)
+		after := time.Now()
+
+		if !ok || sess == nil {
+			t.Fatalf("Expected GetSession to return true and valid session")
+		}
+
+		sess.mu.RLock()
+		lastAccess := sess.LastAccess
+		sess.mu.RUnlock()
+
+		if lastAccess.Before(before) || lastAccess.After(after) {
+			t.Errorf("Expected LastAccess to be updated between %v and %v, got %v", before, after, lastAccess)
+		}
+	})
+}
+
+func TestSessionManager_DeleteSession(t *testing.T) {
+	mgr := NewSessionManager(1 * time.Minute)
+	defer mgr.Close()
+
+	files := map[string]protocol.FileMetadata{
+		"f1": {ID: "f1", FileName: "test.txt", Size: 100},
+	}
+
+	t.Run("delete existing session cancels context and removes from manager", func(t *testing.T) {
+		sess := mgr.CreateSession("192.168.1.10", true, files)
+		if sess == nil {
+			t.Fatal("Failed to create session")
+		}
+
+		if sess.IsCanceled() {
+			t.Errorf("Expected session context not to be canceled initially")
+		}
+
+		mgr.DeleteSession(sess.ID)
+
+		// Verify session is no longer found
+		if _, ok := mgr.GetSession(sess.ID); ok {
+			t.Errorf("Expected session %s to be deleted from manager", sess.ID)
+		}
+
+		// Verify context is canceled
+		if !sess.IsCanceled() {
+			t.Errorf("Expected session context to be canceled after DeleteSession")
+		}
+	})
+
+	t.Run("delete non-existent session should not panic or fail", func(t *testing.T) {
+		nonExistentID := "non-existent-uuid-12345"
+		// Should execute safely without panic
+		mgr.DeleteSession(nonExistentID)
+	})
+
+	t.Run("delete already deleted session is idempotent", func(t *testing.T) {
+		sess := mgr.CreateSession("192.168.1.20", false, files)
+		mgr.DeleteSession(sess.ID)
+
+		// Second delete call on the same ID
+		mgr.DeleteSession(sess.ID)
+
+		if !sess.IsCanceled() {
+			t.Errorf("Expected session context to remain canceled after duplicate DeleteSession")
+		}
+	})
+}
