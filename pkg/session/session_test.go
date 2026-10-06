@@ -252,6 +252,56 @@ func TestSessionManager_Close(t *testing.T) {
 	mgr.Close()
 }
 
+func TestSessionManager_DeleteSession(t *testing.T) {
+	mgr := NewSessionManager(1 * time.Minute)
+	defer mgr.Close()
+
+	files := map[string]protocol.FileMetadata{
+		"f1": {ID: "f1", FileName: "test.txt", Size: 100},
+	}
+
+	t.Run("delete existing session cancels context and removes from manager", func(t *testing.T) {
+		sess := mgr.CreateSession("192.168.1.10", true, files)
+		if sess == nil {
+			t.Fatal("Failed to create session")
+		}
+
+		if sess.IsCanceled() {
+			t.Errorf("Expected session context not to be canceled initially")
+		}
+
+		mgr.DeleteSession(sess.ID)
+
+		// Verify session is no longer found
+		if _, ok := mgr.GetSession(sess.ID); ok {
+			t.Errorf("Expected session %s to be deleted from manager", sess.ID)
+		}
+
+		// Verify context is canceled
+		if !sess.IsCanceled() {
+			t.Errorf("Expected session context to be canceled after DeleteSession")
+		}
+	})
+
+	t.Run("delete non-existent session should not panic or fail", func(t *testing.T) {
+		nonExistentID := "non-existent-uuid-12345"
+		// Should execute safely without panic
+		mgr.DeleteSession(nonExistentID)
+	})
+
+	t.Run("delete already deleted session is idempotent", func(t *testing.T) {
+		sess := mgr.CreateSession("192.168.1.20", false, files)
+		mgr.DeleteSession(sess.ID)
+
+		// Second delete call on the same ID
+		mgr.DeleteSession(sess.ID)
+
+		if !sess.IsCanceled() {
+			t.Errorf("Expected session context to remain canceled after duplicate DeleteSession")
+		}
+	})
+}
+
 func TestSessionManager_ConcurrentAccess(t *testing.T) {
 	mgr := NewSessionManager(500 * time.Millisecond)
 	defer mgr.Close()
