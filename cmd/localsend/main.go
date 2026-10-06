@@ -210,7 +210,13 @@ var receiveCmd = &cobra.Command{
 			myDevice.Fingerprint = uuid.NewString()
 		}
 
-		srv := server.NewServer(myDevice, tlsCert, saveDir, pin, tlsStrict)
+		srv := server.NewServer(server.ServerConfig{
+			MyDevice:  myDevice,
+			TLSCert:   tlsCert,
+			SaveDir:   saveDir,
+			PIN:       pin,
+			StrictTLS: tlsStrict,
+		})
 
 		srv.OnPrepareUpload = func(sender protocol.Device, files []protocol.FileMetadata) (map[string]bool, bool) {
 			if yes {
@@ -415,7 +421,9 @@ var sendCmd = &cobra.Command{
 
 			srvPort := 53318
 			srvDevice := protocol.GetDefaultDevice(srvPort, "http", true)
-			srv := server.NewServer(srvDevice, tls.Certificate{}, "", "", false)
+			srv := server.NewServer(server.ServerConfig{
+				MyDevice: srvDevice,
+			})
 
 			err = srv.StartDownloadServer(srvPort, sharedFiles)
 			if err != nil {

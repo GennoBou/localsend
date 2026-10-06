@@ -39,7 +39,11 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		Download:    true,
 	}
 
-	s := NewServer(myDevice, tlsCert, tempDir, "", false)
+	s := NewServer(ServerConfig{
+		MyDevice: myDevice,
+		TLSCert:  tlsCert,
+		SaveDir:  tempDir,
+	})
 
 	cleanup := func() {
 		os.RemoveAll(tempDir)
@@ -120,7 +124,13 @@ func TestNewServer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewServer(tt.myDevice, tlsCert, tt.saveDir, tt.pin, tt.strictTLS)
+			s := NewServer(ServerConfig{
+				MyDevice:  tt.myDevice,
+				TLSCert:   tlsCert,
+				SaveDir:   tt.saveDir,
+				PIN:       tt.pin,
+				StrictTLS: tt.strictTLS,
+			})
 
 			if s == nil {
 				t.Fatal("expected non-nil Server")
@@ -1055,4 +1065,3 @@ func TestFilterAcceptedFiles(t *testing.T) {
 		}
 	})
 }
-

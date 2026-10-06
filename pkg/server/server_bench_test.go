@@ -54,7 +54,11 @@ func BenchmarkHandleUpload_Throughput(b *testing.B) {
 		Download:    true,
 	}
 
-	s := NewServer(myDevice, tlsCert, tempDir, "", false)
+	s := NewServer(ServerConfig{
+		MyDevice: myDevice,
+		TLSCert:  tlsCert,
+		SaveDir:  tempDir,
+	})
 	defer s.sessionMgr.Close()
 
 	// Transfer 10MB per iteration (~320 chunks of 32KB per iteration)

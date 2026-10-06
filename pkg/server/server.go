@@ -54,15 +54,24 @@ type Server struct {
 	OnDiscover      func(device protocol.Device)
 }
 
-// NewServer creates a new receiving server.
-func NewServer(myDevice protocol.Device, tlsCert tls.Certificate, saveDir string, pin string, strictTLS bool) *Server {
+// ServerConfig holds the configuration options for creating a Server.
+type ServerConfig struct {
+	MyDevice  protocol.Device
+	TLSCert   tls.Certificate
+	SaveDir   string
+	PIN       string
+	StrictTLS bool
+}
+
+// NewServer creates a new receiving server with the provided configuration.
+func NewServer(cfg ServerConfig) *Server {
 	return &Server{
-		myDevice:   myDevice,
-		tlsCert:    tlsCert,
+		myDevice:   cfg.MyDevice,
+		tlsCert:    cfg.TLSCert,
 		sessionMgr: session.NewSessionManager(10 * time.Minute),
-		saveDir:    saveDir,
-		pin:        pin,
-		strictTLS:  strictTLS,
+		saveDir:    cfg.SaveDir,
+		pin:        cfg.PIN,
+		strictTLS:  cfg.StrictTLS,
 	}
 }
 
