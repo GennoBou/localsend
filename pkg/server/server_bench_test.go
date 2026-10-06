@@ -92,3 +92,57 @@ func BenchmarkHandleUpload_Throughput(b *testing.B) {
 		s.handleUpload(w, req)
 	}
 }
+
+func BenchmarkHandleDownload_Lookup(b *testing.B) {
+	tempDir, err := os.MkdirTemp("", "localsend-server-bench-*")
+	if err != nil {
+		b.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	dummyFilePath := tempDir + "/testfile.txt"
+	if err := os.WriteFile(dummyFilePath, []byte("hello world"), 0644); err != nil {
+		b.Fatalf("failed to write dummy file: %v", err)
+	}
+
+	const numFiles = 1000
+	sharedFiles := make([]ShareFile, numFiles)
+	for i := 0; i < numFiles; i++ {
+		sharedFiles[i] = ShareFile{
+			ID:       "file-id-" + string(rune(i)),
+			Path:     dummyFilePath,
+			FileName: "file.txt",
+			Size:     11,
+			FileType: "text/plain",
+		}
+	}
+	targetFileID := sharedFiles[numFiles-1].ID
+
+	myDevice := protocol.Device{Alias: "Bench Device"}
+	var tlsCert tls.Certificate
+	s := NewServer(myDevice, tlsCert, tempDir, "", false)
+	defer s.sessionMgr.Close()
+
+	s.downloadMu.Lock()
+	s.sharedFiles = sharedFiles
+	s.sharedFilesMap = make(map[string]*ShareFile, len(sharedFiles))
+	for i := range sharedFiles {
+		s.sharedFilesMap[sharedFiles[i].ID] = &sharedFiles[i]
+	}
+	s.downloadSession = "bench-session"
+	s.downloadMu.Unlock()
+
+	query := url.Values{}
+	query.Set("sessionId", s.downloadSession)
+	query.Set("fileId", targetFileID)
+
+	req := httptest.NewRequest("GET", "/api/localsend/v2/download?"+query.Encode(), nil)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		w := httptest.NewRecorder()
+		s.handleDownload(w, req)
+	}
+}

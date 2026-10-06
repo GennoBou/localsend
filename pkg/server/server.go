@@ -45,6 +45,7 @@ type Server struct {
 	downloadServer  *http.Server
 	downloadMu      sync.Mutex
 	sharedFiles     []ShareFile
+	sharedFilesMap  map[string]*ShareFile
 	downloadSession string
 
 	// Callback functions
@@ -481,6 +482,10 @@ func (s *Server) StartDownloadServer(port int, sharedFiles []ShareFile) error {
 	}
 
 	s.sharedFiles = sharedFiles
+	s.sharedFilesMap = make(map[string]*ShareFile, len(sharedFiles))
+	for i := range s.sharedFiles {
+		s.sharedFilesMap[s.sharedFiles[i].ID] = &s.sharedFiles[i]
+	}
 	s.downloadSession = uuid.NewString()
 
 	mux := http.NewServeMux()
@@ -514,6 +519,7 @@ func (s *Server) StopDownloadServer(ctx context.Context) {
 		_ = s.downloadServer.Shutdown(ctx)
 		s.downloadServer = nil
 		s.sharedFiles = nil
+		s.sharedFilesMap = nil
 		s.downloadSession = ""
 	}
 }
@@ -697,10 +703,14 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	s.downloadMu.Lock()
 	actualSession := s.downloadSession
 	var targetFile *ShareFile
-	for _, f := range s.sharedFiles {
-		if f.ID == fileID {
-			targetFile = &f
-			break
+	if s.sharedFilesMap != nil {
+		targetFile = s.sharedFilesMap[fileID]
+	} else {
+		for i := range s.sharedFiles {
+			if s.sharedFiles[i].ID == fileID {
+				targetFile = &s.sharedFiles[i]
+				break
+			}
 		}
 	}
 	s.downloadMu.Unlock()
