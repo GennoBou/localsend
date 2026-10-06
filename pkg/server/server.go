@@ -494,12 +494,13 @@ func (s *Server) StartDownloadServer(port int, sharedFiles []ShareFile) error {
 		return fmt.Errorf("failed to listen on port %d for download server: %w", port, err)
 	}
 
-	s.downloadServer = &http.Server{
+	srv := &http.Server{
 		Handler: mux,
 	}
+	s.downloadServer = srv
 
 	go func() {
-		_ = s.downloadServer.Serve(ln)
+		_ = srv.Serve(ln)
 	}()
 
 	return nil

@@ -1,8 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GennoBou/localsend/pkg/crypto"
 	"github.com/GennoBou/localsend/pkg/protocol"
@@ -803,6 +807,154 @@ func TestValidateUploadRequest(t *testing.T) {
 		if errMsg != "IP address mismatch" {
 			t.Errorf("expected 'IP address mismatch', got '%s'", errMsg)
 		}
+	})
+}
+
+// getFreePort listens on port 0 to find a free TCP port for testing.
+func getFreePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on free port: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// TestStopDownloadServer tests the lifecycle and cleanup of StopDownloadServer and StartDownloadServer.
+func TestStopDownloadServer(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	sf, cleanupFile := createTempSharedFile(t, s.saveDir, "download_test.txt", "download content")
+	defer cleanupFile()
+
+	t.Run("Normal lifecycle: Start, test HTTP request, StopDownloadServer", func(t *testing.T) {
+		port := getFreePort(t)
+		sharedFiles := []ShareFile{sf}
+
+		err := s.StartDownloadServer(port, sharedFiles)
+		if err != nil {
+			t.Fatalf("StartDownloadServer failed: %v", err)
+		}
+
+		// Verify state after start
+		s.downloadMu.Lock()
+		if s.downloadServer == nil {
+			t.Error("expected downloadServer to be non-nil after start")
+		}
+		if len(s.sharedFiles) != 1 {
+			t.Errorf("expected 1 shared file, got %d", len(s.sharedFiles))
+		}
+		if s.downloadSession == "" {
+			t.Error("expected downloadSession to be non-empty after start")
+		}
+		sessionID := s.downloadSession
+		s.downloadMu.Unlock()
+
+		// Verify HTTP request to running download server
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/localsend/v2/prepare-download", port))
+		if err != nil {
+			t.Fatalf("failed to make request to download server: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200 OK from prepare-download, got %d", resp.StatusCode)
+		}
+
+		// Stop download server
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		s.StopDownloadServer(ctx)
+
+		// Verify state cleanup after stop
+		s.downloadMu.Lock()
+		if s.downloadServer != nil {
+			t.Error("expected downloadServer to be nil after StopDownloadServer")
+		}
+		if s.sharedFiles != nil {
+			t.Error("expected sharedFiles to be nil after StopDownloadServer")
+		}
+		if s.downloadSession != "" {
+			t.Errorf("expected downloadSession to be empty after StopDownloadServer, got %q", s.downloadSession)
+		}
+		s.downloadMu.Unlock()
+
+		// Verify server is no longer accepting requests
+		_, err = http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/localsend/v2/prepare-download", port))
+		if err == nil {
+			t.Error("expected connection error after server stopped, but request succeeded")
+		}
+
+		_ = sessionID
+	})
+
+	t.Run("Double start returns error", func(t *testing.T) {
+		port := getFreePort(t)
+		sharedFiles := []ShareFile{sf}
+
+		err := s.StartDownloadServer(port, sharedFiles)
+		if err != nil {
+			t.Fatalf("first StartDownloadServer failed: %v", err)
+		}
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			s.StopDownloadServer(ctx)
+		}()
+
+		// Attempting to start again should return an error
+		err2 := s.StartDownloadServer(port, sharedFiles)
+		if err2 == nil {
+			t.Error("expected error when starting download server twice, got nil")
+		} else if !strings.Contains(err2.Error(), "download server is already running") {
+			t.Errorf("unexpected error message: %v", err2)
+		}
+	})
+
+	t.Run("StopDownloadServer when server is not running is safe", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		// Calling StopDownloadServer on unstarted server should not panic or fail
+		s.StopDownloadServer(ctx)
+
+		s.downloadMu.Lock()
+		if s.downloadServer != nil || s.sharedFiles != nil || s.downloadSession != "" {
+			t.Error("unexpected state after StopDownloadServer on unstarted server")
+		}
+		s.downloadMu.Unlock()
+	})
+
+	t.Run("Server.Shutdown calls StopDownloadServer", func(t *testing.T) {
+		port := getFreePort(t)
+		sharedFiles := []ShareFile{sf}
+
+		err := s.StartDownloadServer(port, sharedFiles)
+		if err != nil {
+			t.Fatalf("StartDownloadServer failed: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		// Shutdown main server which includes StopDownloadServer
+		err = s.Shutdown(ctx)
+		if err != nil {
+			t.Fatalf("s.Shutdown failed: %v", err)
+		}
+
+		s.downloadMu.Lock()
+		if s.downloadServer != nil {
+			t.Error("expected downloadServer to be nil after s.Shutdown")
+		}
+		if s.sharedFiles != nil {
+			t.Error("expected sharedFiles to be nil after s.Shutdown")
+		}
+		if s.downloadSession != "" {
+			t.Error("expected downloadSession to be empty after s.Shutdown")
+		}
+		s.downloadMu.Unlock()
 	})
 }
 
