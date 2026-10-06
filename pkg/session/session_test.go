@@ -245,6 +245,82 @@ func TestUploadSession_Methods(t *testing.T) {
 	}
 }
 
+func TestSessionManager_CreateSession(t *testing.T) {
+	t.Run("creates and stores session successfully", func(t *testing.T) {
+		mgr := NewSessionManager(5 * time.Minute)
+		defer mgr.Close()
+
+		clientIP := "192.168.1.10"
+		clientVerified := true
+		filesMeta := map[string]protocol.FileMetadata{
+			"f1": {ID: "f1", FileName: "doc.txt", Size: 100},
+		}
+
+		sess := mgr.CreateSession(clientIP, clientVerified, filesMeta)
+		if sess == nil {
+			t.Fatal("Expected non-nil UploadSession")
+		}
+
+		if sess.ClientIP != clientIP {
+			t.Errorf("Expected ClientIP %q, got %q", clientIP, sess.ClientIP)
+		}
+		if sess.ClientVerified != clientVerified {
+			t.Errorf("Expected ClientVerified %v, got %v", clientVerified, sess.ClientVerified)
+		}
+
+		retrieved, ok := mgr.GetSession(sess.ID)
+		if !ok {
+			t.Fatalf("Expected session %s to be stored in manager", sess.ID)
+		}
+		if retrieved != sess {
+			t.Errorf("Expected retrieved session pointer %v, got %v", sess, retrieved)
+		}
+	})
+
+	t.Run("creates multiple unique sessions", func(t *testing.T) {
+		mgr := NewSessionManager(5 * time.Minute)
+		defer mgr.Close()
+
+		sess1 := mgr.CreateSession("10.0.0.1", true, nil)
+		sess2 := mgr.CreateSession("10.0.0.2", false, nil)
+
+		if sess1.ID == sess2.ID {
+			t.Errorf("Expected unique session IDs, got identical ID: %s", sess1.ID)
+		}
+
+		retrieved1, ok1 := mgr.GetSession(sess1.ID)
+		retrieved2, ok2 := mgr.GetSession(sess2.ID)
+
+		if !ok1 || retrieved1.ID != sess1.ID {
+			t.Errorf("Failed to retrieve sess1 from manager")
+		}
+		if !ok2 || retrieved2.ID != sess2.ID {
+			t.Errorf("Failed to retrieve sess2 from manager")
+		}
+	})
+
+	t.Run("creates session with empty metadata", func(t *testing.T) {
+		mgr := NewSessionManager(5 * time.Minute)
+		defer mgr.Close()
+
+		emptyMeta := map[string]protocol.FileMetadata{}
+		sess := mgr.CreateSession("127.0.0.1", false, emptyMeta)
+
+		if sess == nil {
+			t.Fatal("Expected non-nil UploadSession with empty metadata")
+		}
+
+		if len(sess.FilesMetadata) != 0 {
+			t.Errorf("Expected empty FilesMetadata, got %d entries", len(sess.FilesMetadata))
+		}
+
+		_, ok := mgr.GetSession(sess.ID)
+		if !ok {
+			t.Errorf("Expected session with empty metadata to be stored in manager")
+		}
+	})
+}
+
 func TestSessionManager_Close(t *testing.T) {
 	mgr := NewSessionManager(100 * time.Millisecond)
 	// Multiple Close calls should not panic
