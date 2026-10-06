@@ -205,6 +205,75 @@ func TestNewUploadSession(t *testing.T) {
 	})
 }
 
+func TestUploadSession_GetClientInfo(t *testing.T) {
+	tests := []struct {
+		name           string
+		clientIP       string
+		clientVerified bool
+	}{
+		{
+			name:           "verified ipv4 client",
+			clientIP:       "192.168.1.100",
+			clientVerified: true,
+		},
+		{
+			name:           "unverified ipv6 client",
+			clientIP:       "2001:db8::1",
+			clientVerified: false,
+		},
+		{
+			name:           "empty ip unverified",
+			clientIP:       "",
+			clientVerified: false,
+		},
+		{
+			name:           "localhost verified",
+			clientIP:       "127.0.0.1",
+			clientVerified: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := NewUploadSession(tt.clientIP, tt.clientVerified, nil)
+			gotIP, gotVerified := sess.GetClientInfo()
+			if gotIP != tt.clientIP {
+				t.Errorf("GetClientInfo() IP = %q, want %q", gotIP, tt.clientIP)
+			}
+			if gotVerified != tt.clientVerified {
+				t.Errorf("GetClientInfo() Verified = %v, want %v", gotVerified, tt.clientVerified)
+			}
+		})
+	}
+
+	t.Run("concurrent access thread safety", func(t *testing.T) {
+		sess := NewUploadSession("10.0.0.1", true, map[string]protocol.FileMetadata{
+			"f1": {ID: "f1", FileName: "test.txt", Size: 100},
+		})
+
+		const goroutines = 20
+		const iterations = 100
+		var wg sync.WaitGroup
+
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < iterations; j++ {
+					ip, verified := sess.GetClientInfo()
+					if ip != "10.0.0.1" || !verified {
+						t.Errorf("GetClientInfo() concurrent read unexpected result: got (%q, %v)", ip, verified)
+					}
+					sess.Touch()
+					sess.UpdateProgress("f1", int64(j))
+				}
+			}()
+		}
+
+		wg.Wait()
+	})
+}
+
 func TestUploadSession_Methods(t *testing.T) {
 	meta := protocol.FileMetadata{
 		ID:       "file-alpha",
@@ -212,12 +281,6 @@ func TestUploadSession_Methods(t *testing.T) {
 		Size:     500,
 	}
 	sess := NewUploadSession("10.0.0.42", true, map[string]protocol.FileMetadata{meta.ID: meta})
-
-	// GetClientInfo
-	ip, verified := sess.GetClientInfo()
-	if ip != "10.0.0.42" || !verified {
-		t.Errorf("GetClientInfo() = (%q, %v), want ('10.0.0.42', true)", ip, verified)
-	}
 
 	// GetFileTokenAndMeta - Existing
 	token, retrievedMeta, ok := sess.GetFileTokenAndMeta(meta.ID)
