@@ -201,7 +201,7 @@ func (s *Server) areAllFilesDuplicate(files map[string]protocol.FileMetadata) bo
 // filterAcceptedFiles executes the OnPrepareUpload callback if configured and filters the files accordingly.
 // Returns nil if no files are accepted or if reception is rejected.
 func (s *Server) filterAcceptedFiles(sender protocol.Device, files map[string]protocol.FileMetadata) map[string]protocol.FileMetadata {
-	var filesList []protocol.FileMetadata
+	filesList := make([]protocol.FileMetadata, 0, len(files))
 	for _, f := range files {
 		filesList = append(filesList, f)
 	}

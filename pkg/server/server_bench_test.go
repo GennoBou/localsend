@@ -92,3 +92,27 @@ func BenchmarkHandleUpload_Throughput(b *testing.B) {
 		s.handleUpload(w, req)
 	}
 }
+
+func BenchmarkFilterAcceptedFiles(b *testing.B) {
+	s := &Server{}
+	sender := protocol.Device{
+		Alias: "Sender",
+	}
+
+	files := make(map[string]protocol.FileMetadata, 100)
+	for i := 0; i < 100; i++ {
+		id := string(rune(i))
+		files[id] = protocol.FileMetadata{
+			ID:       id,
+			FileName: "file.txt",
+			Size:     1024,
+		}
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		_ = s.filterAcceptedFiles(sender, files)
+	}
+}
