@@ -17,6 +17,8 @@ import (
 	"github.com/GennoBou/localsend/pkg/protocol"
 )
 
+var jsonMarshal = json.Marshal
+
 // SendAnnounce announces own device information to the surrounding network using UDP multicast.
 func SendAnnounce(myDevice protocol.Device, announce bool) error {
 	addr, err := net.ResolveUDPAddr("udp4", protocol.MulticastAddr)
@@ -34,7 +36,7 @@ func SendAnnounce(myDevice protocol.Device, announce bool) error {
 		Device:   myDevice,
 		Announce: announce,
 	}
-	data, err := json.Marshal(msg)
+	data, err := jsonMarshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal announce message: %w", err)
 	}

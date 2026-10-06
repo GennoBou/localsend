@@ -3,11 +3,13 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -66,6 +68,29 @@ func TestIsPrivateIP(t *testing.T) {
 			t.Errorf("isPrivateIP(nil) expected false, got true")
 		}
 	})
+}
+
+func TestSendAnnounce_MarshalError(t *testing.T) {
+	origJSONMarshal := jsonMarshal
+	defer func() { jsonMarshal = origJSONMarshal }()
+
+	jsonMarshal = func(v any) ([]byte, error) {
+		return nil, errors.New("mock marshal error")
+	}
+
+	device := protocol.Device{
+		Alias: "TestDevice",
+	}
+
+	err := SendAnnounce(device, true)
+	if err == nil {
+		t.Fatalf("expected error when marshaling announce message, got nil")
+	}
+
+	expectedSubstring := "failed to marshal announce message"
+	if !strings.Contains(err.Error(), expectedSubstring) {
+		t.Errorf("expected error containing %q, got %q", expectedSubstring, err.Error())
+	}
 }
 
 func TestIsLocalIP(t *testing.T) {
