@@ -243,9 +243,10 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 	// to discover other instances on the same host
 	targetIPs := append(localIPs, "127.0.0.1")
 	for _, ip := range targetIPs {
+		isTargetLocal := ip == "127.0.0.1" || isLocalIP(ip, localIPs)
 		for port := protocol.DefaultPort; port <= protocol.DefaultPort+9; port++ {
 			// Skip scanning own IP and port to prevent self-scanning
-			isSelf := myDevice.Fingerprint != "" && port == myDevice.Port && (ip == "127.0.0.1" || isLocalIP(ip, localIPs))
+			isSelf := myDevice.Fingerprint != "" && port == myDevice.Port && isTargetLocal
 			if isSelf {
 				continue
 			}

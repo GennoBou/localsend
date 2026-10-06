@@ -108,3 +108,48 @@ func BenchmarkScanHostOptimized(b *testing.B) {
 		scanHostOptimized(ctx, client, dev, "192.168.1.100", 53317, func(d protocol.Device) {})
 	}
 }
+
+func BenchmarkConflictPortsLoopBaseline(b *testing.B) {
+	localIPs := []string{"192.168.1.10", "10.0.0.5", "172.16.0.2"}
+	targetIPs := append(localIPs, "127.0.0.1")
+	myDevice := protocol.Device{
+		Fingerprint: "fingerprint123",
+		Port:        53317,
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for _, ip := range targetIPs {
+			for port := protocol.DefaultPort; port <= protocol.DefaultPort+9; port++ {
+				isSelf := myDevice.Fingerprint != "" && port == myDevice.Port && (ip == "127.0.0.1" || isLocalIP(ip, localIPs))
+				if isSelf {
+					_ = isSelf
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkConflictPortsLoopOptimized(b *testing.B) {
+	localIPs := []string{"192.168.1.10", "10.0.0.5", "172.16.0.2"}
+	targetIPs := append(localIPs, "127.0.0.1")
+	myDevice := protocol.Device{
+		Fingerprint: "fingerprint123",
+		Port:        53317,
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for _, ip := range targetIPs {
+			isTargetLocal := ip == "127.0.0.1" || isLocalIP(ip, localIPs)
+			for port := protocol.DefaultPort; port <= protocol.DefaultPort+9; port++ {
+				isSelf := myDevice.Fingerprint != "" && port == myDevice.Port && isTargetLocal
+				if isSelf {
+					_ = isSelf
+				}
+			}
+		}
+	}
+}
