@@ -42,7 +42,7 @@ func setupTestServerAndClient(t *testing.T, handler http.HandlerFunc) (*httptest
 		Alias:       "TestSender",
 		Version:     "2.0",
 		Fingerprint: "sender-fingerprint",
-	}, nil, "", false, "")
+	}, ClientOptions{})
 	if err != nil {
 		server.Close()
 		t.Fatalf("failed to create client: %v", err)
@@ -442,7 +442,10 @@ func TestClient_NewClient_Options(t *testing.T) {
 	myDev := protocol.Device{Alias: "Me"}
 
 	t.Run("Valid proxy URL", func(t *testing.T) {
-		c, err := NewClient(myDev, nil, "http://127.0.0.1:8080", true, "")
+		c, err := NewClient(myDev, ClientOptions{
+			ProxyURL: "http://127.0.0.1:8080",
+			Insecure: true,
+		})
 		if err != nil {
 			t.Fatalf("expected success, got %v", err)
 		}
@@ -452,14 +455,19 @@ func TestClient_NewClient_Options(t *testing.T) {
 	})
 
 	t.Run("Invalid proxy URL", func(t *testing.T) {
-		_, err := NewClient(myDev, nil, "http://invalid-url-with-control-char\x7f", true, "")
+		_, err := NewClient(myDev, ClientOptions{
+			ProxyURL: "http://invalid-url-with-control-char\x7f",
+			Insecure: true,
+		})
 		if err == nil {
 			t.Fatal("expected error for invalid proxy URL, got nil")
 		}
 	})
 
 	t.Run("Non-existent CA file", func(t *testing.T) {
-		_, err := NewClient(myDev, nil, "", false, "non_existent_ca_cert.pem")
+		_, err := NewClient(myDev, ClientOptions{
+			CAPath: "non_existent_ca_cert.pem",
+		})
 		if err == nil {
 			t.Fatal("expected error for non-existent CA file, got nil")
 		}

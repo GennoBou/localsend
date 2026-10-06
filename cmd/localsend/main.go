@@ -270,7 +270,10 @@ var receiveCmd = &cobra.Command{
 		onAnnounce := func(dev protocol.Device) {
 			logDebug("Announce received (registration request): %s (%s) - %s://%s:%d", dev.Alias, dev.DeviceModel, dev.Protocol, dev.IP, dev.Port)
 			go func() {
-				cli, err := client.NewClient(myDevice, &tlsCert, "", true, "")
+				cli, err := client.NewClient(myDevice, client.ClientOptions{
+					ClientCert: &tlsCert,
+					Insecure:   true,
+				})
 				if err != nil {
 					logDebug("登録用クライアントの初期化失敗: %v", err)
 					return
@@ -453,7 +456,13 @@ var sendCmd = &cobra.Command{
 				Protocol: "https",
 			}
 
-			tempCli, err := client.NewClient(myDevice, clientCert, proxy, insecure, ca)
+			clientOpts := client.ClientOptions{
+				ClientCert: clientCert,
+				ProxyURL:   proxy,
+				Insecure:   insecure,
+				CAPath:     ca,
+			}
+			tempCli, err := client.NewClient(myDevice, clientOpts)
 			if err != nil {
 				fmt.Printf("Failed to init client: %v\n", err)
 				os.Exit(1)
@@ -465,7 +474,7 @@ var sendCmd = &cobra.Command{
 			if err != nil {
 				fmt.Printf("Debug: HTTPS connection failed: %v. Retrying with HTTP...\n", err)
 				targetDevice.Protocol = "http"
-				tempCli2, _ := client.NewClient(myDevice, clientCert, proxy, insecure, ca)
+				tempCli2, _ := client.NewClient(myDevice, clientOpts)
 				ctx2, cancel2 := context.WithTimeout(context.Background(), 3*time.Second)
 				partner2, err2 := tempCli2.Register(ctx2, &targetDevice)
 				cancel2()
@@ -556,7 +565,12 @@ var sendCmd = &cobra.Command{
 			}
 		}
 
-		cli, err := client.NewClient(myDevice, clientCert, proxy, insecure, ca)
+		cli, err := client.NewClient(myDevice, client.ClientOptions{
+			ClientCert: clientCert,
+			ProxyURL:   proxy,
+			Insecure:   insecure,
+			CAPath:     ca,
+		})
 		if err != nil {
 			fmt.Printf("Failed to initialize client: %v\n", err)
 			os.Exit(1)

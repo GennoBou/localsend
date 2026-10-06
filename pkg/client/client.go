@@ -57,6 +57,14 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// ClientOptions contains configuration options for creating a Client.
+type ClientOptions struct {
+	ClientCert *tls.Certificate
+	ProxyURL   string
+	Insecure   bool
+	CAPath     string
+}
+
 // Client is a client that handles the file sending process of the LocalSend protocol.
 type Client struct {
 	myDevice   protocol.Device
@@ -64,27 +72,23 @@ type Client struct {
 	insecure   bool
 }
 
-// NewClient creates a new sending client.
-// clientCert is the self mTLS certificate (nil if not specified).
-// proxyURL is the URL of the HTTP/HTTPS proxy (empty string if not specified).
-// insecure is true to skip self-signed certificate validation.
-// caPath is the filepath to a custom CA certificate (empty string if not specified).
-func NewClient(myDevice protocol.Device, clientCert *tls.Certificate, proxyURL string, insecure bool, caPath string) (*Client, error) {
+// NewClient creates a new sending client with the specified device and options.
+func NewClient(myDevice protocol.Device, opts ClientOptions) (*Client, error) {
 	tlsConfig := &tls.Config{}
 
-	if clientCert != nil {
-		tlsConfig.Certificates = []tls.Certificate{*clientCert}
+	if opts.ClientCert != nil {
+		tlsConfig.Certificates = []tls.Certificate{*opts.ClientCert}
 	}
 
 	// LocalSend's HTTPS communication is fundamentally based on self-signed certificates,
 	// so standard CA verification is always skipped unless a custom CA is specified.
 	// (Actual validation is performed post-connection by verifying the fingerprint)
-	if insecure || caPath == "" {
+	if opts.Insecure || opts.CAPath == "" {
 		tlsConfig.InsecureSkipVerify = true
 	}
 
-	if caPath != "" {
-		caCert, err := os.ReadFile(caPath)
+	if opts.CAPath != "" {
+		caCert, err := os.ReadFile(opts.CAPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
 		}
@@ -99,8 +103,8 @@ func NewClient(myDevice protocol.Device, clientCert *tls.Certificate, proxyURL s
 		TLSClientConfig: tlsConfig,
 	}
 
-	if proxyURL != "" {
-		u, err := url.Parse(proxyURL)
+	if opts.ProxyURL != "" {
+		u, err := url.Parse(opts.ProxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("invalid proxy URL: %w", err)
 		}
@@ -120,7 +124,7 @@ func NewClient(myDevice protocol.Device, clientCert *tls.Certificate, proxyURL s
 	return &Client{
 		myDevice:   myDevice,
 		httpClient: httpClient,
-		insecure:   insecure,
+		insecure:   opts.Insecure,
 	}, nil
 }
 
