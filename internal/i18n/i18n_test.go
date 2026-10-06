@@ -19,7 +19,7 @@ func TestI18nTranslations(t *testing.T) {
 	}
 
 	// Test placeholder replacement
-	msg = T("sending_files", map[string]interface{}{"Alias": "Nice Orange"})
+	msg = T("sending_files", map[string]any{"Alias": "Nice Orange"})
 	expected = "Sending files to Nice Orange..."
 	if msg != expected {
 		t.Errorf("Expected '%s', got '%s'", expected, msg)
@@ -38,7 +38,7 @@ func TestI18nTranslations(t *testing.T) {
 		t.Errorf("Expected '%s', got '%s'", expected, msg)
 	}
 
-	msg = T("sending_files", map[string]interface{}{"Alias": "Secret Banana"})
+	msg = T("sending_files", map[string]any{"Alias": "Secret Banana"})
 	expected = "Secret Banana へファイルを送信中..."
 	if msg != expected {
 		t.Errorf("Expected '%s', got '%s'", expected, msg)
@@ -91,7 +91,7 @@ func TestT(t *testing.T) {
 		name     string
 		lang     string
 		key      string
-		args     interface{}
+		args     any
 		expected string
 	}
 
@@ -114,7 +114,7 @@ func TestT(t *testing.T) {
 			name:     "English translation with map args",
 			lang:     "en",
 			key:      "sending_files",
-			args:     map[string]interface{}{"Alias": "Alice"},
+			args:     map[string]any{"Alias": "Alice"},
 			expected: "Sending files to Alice...",
 		},
 		{
@@ -149,14 +149,14 @@ func TestT(t *testing.T) {
 			name:     "Template parse error returns raw msg",
 			lang:     "en",
 			key:      "invalid_template_key",
-			args:     map[string]interface{}{"Name": "World"},
+			args:     map[string]any{"Name": "World"},
 			expected: "Hello {{.Unclosed",
 		},
 		{
 			name:     "Template execute error returns raw msg",
 			lang:     "en",
 			key:      "exec_error_key",
-			args:     map[string]interface{}{"NonExistentField": "not_a_struct"},
+			args:     map[string]any{"NonExistentField": "not_a_struct"},
 			expected: "Hello {{.NonExistentField.SubField}}",
 		},
 	}
