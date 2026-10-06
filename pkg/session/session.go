@@ -169,7 +169,7 @@ func (m *SessionManager) DeleteSession(id string) {
 // IsBusy returns whether there is any currently active session.
 func (m *SessionManager) IsBusy() bool {
 	busy := false
-	m.sessions.Range(func(key, value interface{}) bool {
+	m.sessions.Range(func(key, value any) bool {
 		session := value.(*UploadSession)
 		session.mu.RLock()
 		// Regard as busy if a session exists within the expiration period (time since last access is less than timeout)
@@ -195,7 +195,7 @@ func (m *SessionManager) startCleanupLoop(interval time.Duration) {
 			return
 		case <-ticker.C:
 			now := time.Now()
-			m.sessions.Range(func(key, value interface{}) bool {
+			m.sessions.Range(func(key, value any) bool {
 				session := value.(*UploadSession)
 				session.mu.RLock()
 				lastAccess := session.LastAccess

@@ -100,7 +100,7 @@ var scanCmd = &cobra.Command{
 
 		// Build list of discovered devices
 		var list []protocol.Device
-		discoveredDevices.Range(func(key, value interface{}) bool {
+		discoveredDevices.Range(func(key, value any) bool {
 			list = append(list, value.(protocol.Device))
 			return true
 		})
@@ -503,7 +503,7 @@ var sendCmd = &cobra.Command{
 			cancel()
 
 			var list []protocol.Device
-			discoveredDevices.Range(func(key, value interface{}) bool {
+			discoveredDevices.Range(func(key, value any) bool {
 				list = append(list, value.(protocol.Device))
 				return true
 			})
