@@ -2,11 +2,17 @@ package discovery
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/GennoBou/localsend/pkg/protocol"
+	"github.com/pion/mdns/v2"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 func TestMDNSServiceDiscovery(t *testing.T) {
@@ -119,5 +125,144 @@ func TestDiscoveryModeInitializations(t *testing.T) {
 			}
 			advertiser.Close()
 		})
+	}
+}
+
+func TestRegisterMDNSService_MulticastConnError(t *testing.T) {
+	origConnFunc := createMulticastConnV4Func
+	defer func() { createMulticastConnV4Func = origConnFunc }()
+
+	expectedErr := fmt.Errorf("simulated multicast conn error")
+	createMulticastConnV4Func = func() (*ipv4.PacketConn, *net.UDPConn, error) {
+		return nil, nil, expectedErr
+	}
+
+	ctx := context.Background()
+	dev := protocol.Device{
+		Alias:       "TestDevice",
+		Fingerprint: "1234567890",
+	}
+
+	closer, err := RegisterMDNSService(ctx, dev)
+	if err == nil {
+		if closer != nil {
+			closer.Close()
+		}
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), expectedErr.Error()) {
+		t.Errorf("expected error containing %q, got %q", expectedErr.Error(), err.Error())
+	}
+}
+
+func TestRegisterMDNSService_ServerCreationError(t *testing.T) {
+	origServerFunc := newMDNSServerFunc
+	defer func() { newMDNSServerFunc = origServerFunc }()
+
+	expectedErr := fmt.Errorf("simulated server creation error")
+	newMDNSServerFunc = func(connV4 *ipv4.PacketConn, connV6 *ipv6.PacketConn, options ...mdns.ServerOption) (*mdns.Conn, error) {
+		return nil, expectedErr
+	}
+
+	ctx := context.Background()
+	dev := protocol.Device{
+		Alias:       "TestDevice",
+		Fingerprint: "1234567890",
+	}
+
+	closer, err := RegisterMDNSService(ctx, dev)
+	if err == nil {
+		if closer != nil {
+			closer.Close()
+		}
+		t.Fatal("expected error when mdns.NewServer fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to create mDNS advertising server") {
+		t.Errorf("expected server creation error message, got: %v", err)
+	}
+}
+
+func TestStartMDNSListener_ErrorPaths(t *testing.T) {
+	t.Run("MulticastConnError", func(t *testing.T) {
+		origConnFunc := createMulticastConnV4Func
+		defer func() { createMulticastConnV4Func = origConnFunc }()
+
+		expectedErr := fmt.Errorf("simulated multicast conn error")
+		createMulticastConnV4Func = func() (*ipv4.PacketConn, *net.UDPConn, error) {
+			return nil, nil, expectedErr
+		}
+
+		err := StartMDNSListener(context.Background(), func(protocol.Device) {})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), expectedErr.Error()) {
+			t.Errorf("expected %q, got %q", expectedErr.Error(), err.Error())
+		}
+	})
+
+	t.Run("ServerCreationError", func(t *testing.T) {
+		origServerFunc := newMDNSServerFunc
+		defer func() { newMDNSServerFunc = origServerFunc }()
+
+		expectedErr := fmt.Errorf("simulated server creation error")
+		newMDNSServerFunc = func(connV4 *ipv4.PacketConn, connV6 *ipv6.PacketConn, options ...mdns.ServerOption) (*mdns.Conn, error) {
+			return nil, expectedErr
+		}
+
+		err := StartMDNSListener(context.Background(), func(protocol.Device) {})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "failed to create mDNS browsing server") {
+			t.Errorf("expected server creation error message, got: %v", err)
+		}
+	})
+}
+
+func TestRegisterMDNSService_InstanceAndHostNameLogic(t *testing.T) {
+	// Test short fingerprint (< 8 chars) and long alias (> 63 chars)
+	longAlias := "ThisIsAVeryLongDeviceAliasThatExceedsSixtyThreeCharactersLimitInMDNSInstanceName"
+	shortFingerprintDev := protocol.Device{
+		Alias:       longAlias,
+		Fingerprint: "short",
+		Port:        53322,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	closer, err := RegisterMDNSService(ctx, shortFingerprintDev)
+	if err != nil {
+		t.Fatalf("failed to register service with short fingerprint and long alias: %v", err)
+	}
+	defer closer.Close()
+
+	// Cancel context to test context-cancellation cleanup goroutine
+	cancel()
+}
+
+func TestMDNSCloser_Idempotency(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dev := protocol.Device{
+		Alias:       "CloseTestDevice",
+		Fingerprint: "1234567890",
+		Port:        53323,
+	}
+
+	closer, err := RegisterMDNSService(ctx, dev)
+	if err != nil {
+		t.Fatalf("failed to register service: %v", err)
+	}
+
+	// First Close should succeed (or return whatever underlying error, usually nil)
+	err1 := closer.Close()
+	// Second Close should return same err (nil) and not panic
+	err2 := closer.Close()
+
+	if err1 != err2 {
+		t.Errorf("expected second close error %v to match first close error %v", err2, err1)
 	}
 }

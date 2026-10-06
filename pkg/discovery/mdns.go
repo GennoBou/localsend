@@ -40,6 +40,11 @@ func listenMulticastUDP(network string, address string) (*net.UDPConn, error) {
 	return packetConn.(*net.UDPConn), nil
 }
 
+var (
+	createMulticastConnV4Func = createMulticastConnV4
+	newMDNSServerFunc         = mdns.NewServer
+)
+
 // createMulticastConnV4 initializes an ipv4.PacketConn for mDNS.
 func createMulticastConnV4() (*ipv4.PacketConn, *net.UDPConn, error) {
 	udpConn, err := listenMulticastUDP("udp4", mdns.DefaultAddressIPv4)
@@ -52,14 +57,14 @@ func createMulticastConnV4() (*ipv4.PacketConn, *net.UDPConn, error) {
 // StartMDNSListener starts an mDNS listener to browse for LocalSend devices.
 // It runs asynchronously and context cancellation will clean up resources.
 func StartMDNSListener(ctx context.Context, onDiscover func(protocol.Device)) error {
-	pcV4, rawConn, err := createMulticastConnV4()
+	pcV4, rawConn, err := createMulticastConnV4Func()
 	if err != nil {
 		return err
 	}
 
 	// Create an mDNS server connection to browse for services.
 	// Omitting WithRecordTypes allows processing all DNS-SD records (PTR, SRV, TXT, A, AAAA).
-	server, err := mdns.NewServer(pcV4, nil)
+	server, err := newMDNSServerFunc(pcV4, nil)
 	if err != nil {
 		rawConn.Close()
 		return fmt.Errorf("failed to create mDNS browsing server: %w", err)
@@ -92,7 +97,7 @@ func StartMDNSListener(ctx context.Context, onDiscover func(protocol.Device)) er
 // RegisterMDNSService registers the local device as an mDNS service.
 // Returns a Closer that unregisters the service when closed.
 func RegisterMDNSService(ctx context.Context, myDevice protocol.Device) (io.Closer, error) {
-	pcV4, rawConn, err := createMulticastConnV4()
+	pcV4, rawConn, err := createMulticastConnV4Func()
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +143,7 @@ func RegisterMDNSService(ctx context.Context, myDevice protocol.Device) (io.Clos
 	}
 
 	// Establish server and register service
-	server, err := mdns.NewServer(pcV4, nil,
+	server, err := newMDNSServerFunc(pcV4, nil,
 		mdns.WithLocalNames(hostName),
 		mdns.WithService(svc),
 	)
@@ -165,15 +170,15 @@ type mdnsCloser struct {
 	server  *mdns.Conn
 	rawConn *net.UDPConn
 	once    sync.Once
+	err     error
 }
 
 func (c *mdnsCloser) Close() error {
-	var err error
 	c.once.Do(func() {
 		_ = c.server.Close()
-		err = c.rawConn.Close()
+		c.err = c.rawConn.Close()
 	})
-	return err
+	return c.err
 }
 
 // parseDeviceFromServiceEvent parses an mDNS ServiceEvent into a protocol.Device struct.
