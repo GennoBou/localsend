@@ -55,13 +55,61 @@ func TestI18nFallback(t *testing.T) {
 	}
 }
 
-func TestDetectLanguage(t *testing.T) {
-	detectLanguage()
-	lang := GetLanguage()
-	t.Logf("Detected language: %s", lang)
-	if lang != "ja" && lang != "en" {
-		t.Errorf("Expected 'ja' or 'en', got '%s'", lang)
+func TestSetLanguage(t *testing.T) {
+	origLang := GetLanguage()
+	t.Cleanup(func() {
+		SetLanguage(origLang)
+	})
+
+	SetLanguage("JA")
+	if GetLanguage() != "ja" {
+		t.Errorf("Expected 'ja' after SetLanguage('JA'), got '%s'", GetLanguage())
 	}
+
+	SetLanguage("EN")
+	if GetLanguage() != "en" {
+		t.Errorf("Expected 'en' after SetLanguage('EN'), got '%s'", GetLanguage())
+	}
+
+	// Invalid language should be ignored and leave language unchanged
+	SetLanguage("fr")
+	if GetLanguage() != "en" {
+		t.Errorf("Expected 'en' (unchanged) after SetLanguage('fr'), got '%s'", GetLanguage())
+	}
+}
+
+func TestDetectLanguage(t *testing.T) {
+	origLang := GetLanguage()
+	t.Cleanup(func() {
+		currentLang = origLang
+	})
+
+	t.Run("Default detection", func(t *testing.T) {
+		detectLanguage()
+		lang := GetLanguage()
+		t.Logf("Detected language: %s", lang)
+		if lang != "ja" && lang != "en" {
+			t.Errorf("Expected 'ja' or 'en', got '%s'", lang)
+		}
+	})
+
+	t.Run("Env var LC_ALL=ja", func(t *testing.T) {
+		t.Setenv("LC_ALL", "ja_JP.UTF-8")
+		detectLanguage()
+		if GetLanguage() != "ja" {
+			t.Errorf("Expected 'ja', got '%s'", GetLanguage())
+		}
+	})
+
+	t.Run("Env var LANG=en", func(t *testing.T) {
+		t.Setenv("LC_ALL", "")
+		t.Setenv("LC_MESSAGES", "")
+		t.Setenv("LANG", "en_US.UTF-8")
+		detectLanguage()
+		if GetLanguage() != "en" {
+			t.Errorf("Expected 'en', got '%s'", GetLanguage())
+		}
+	})
 }
 
 func TestT(t *testing.T) {
@@ -158,6 +206,20 @@ func TestT(t *testing.T) {
 			key:      "exec_error_key",
 			args:     map[string]any{"NonExistentField": "not_a_struct"},
 			expected: "Hello {{.NonExistentField.SubField}}",
+		},
+		{
+			name:     "Empty key returns empty key",
+			lang:     "en",
+			key:      "",
+			args:     nil,
+			expected: "",
+		},
+		{
+			name:     "Typed nil pointer as args gracefully handles execution error",
+			lang:     "en",
+			key:      "sending_files",
+			args:     (*struct{ Alias string })(nil),
+			expected: "Sending files to {{.Alias}}...",
 		},
 	}
 
