@@ -293,3 +293,38 @@ func TestSessionManager_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestUploadSession_IsCanceled(t *testing.T) {
+	t.Run("initial state is not canceled", func(t *testing.T) {
+		sess := NewUploadSession("127.0.0.1", true, nil)
+		if sess.IsCanceled() {
+			t.Errorf("expected IsCanceled() = false for newly created session, got true")
+		}
+	})
+
+	t.Run("canceled via Cancel()", func(t *testing.T) {
+		sess := NewUploadSession("127.0.0.1", true, nil)
+		if sess.IsCanceled() {
+			t.Errorf("expected IsCanceled() = false initially, got true")
+		}
+		sess.Cancel()
+		if !sess.IsCanceled() {
+			t.Errorf("expected IsCanceled() = true after Cancel(), got false")
+		}
+	})
+
+	t.Run("canceled via SessionManager DeleteSession", func(t *testing.T) {
+		mgr := NewSessionManager(1 * time.Minute)
+		defer mgr.Close()
+
+		sess := mgr.CreateSession("127.0.0.1", true, nil)
+		if sess.IsCanceled() {
+			t.Errorf("expected IsCanceled() = false before DeleteSession, got true")
+		}
+
+		mgr.DeleteSession(sess.ID)
+		if !sess.IsCanceled() {
+			t.Errorf("expected IsCanceled() = true after DeleteSession, got false")
+		}
+	})
+}
