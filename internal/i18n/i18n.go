@@ -73,7 +73,7 @@ func GetLanguage() string {
 
 // T translates and returns the message for the specified key.
 // If args are provided, it interpolates placeholders using Go's template engine.
-func T(key string, args interface{}) string {
+func T(key string, args any) string {
 	langTranslations, ok := translations[currentLang]
 	if !ok {
 		langTranslations = translations["en"]
