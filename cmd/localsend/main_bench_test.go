@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/GennoBou/localsend/pkg/client"
+	"github.com/GennoBou/localsend/pkg/server"
 )
 
 // BenchmarkSequentialHashing benchmarks hashing 10 files sequentially.
@@ -71,5 +74,63 @@ func BenchmarkConcurrentHashing(b *testing.B) {
 			}(fp)
 		}
 		wg.Wait()
+	}
+}
+
+func BenchmarkSharedFilesUnallocated(b *testing.B) {
+	args := make([]string, 100)
+	files := make([]client.SendFileSource, 100)
+	for i := 0; i < 100; i++ {
+		args[i] = fmt.Sprintf("file_%d.txt", i)
+		files[i] = client.SendFileSource{
+			ID:       fmt.Sprintf("id_%d", i),
+			FileName: fmt.Sprintf("file_%d.txt", i),
+			Size:     1024,
+		}
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var sharedFiles []server.ShareFile
+		for j, arg := range args {
+			sharedFiles = append(sharedFiles, server.ShareFile{
+				ID:       files[j].ID,
+				Path:     arg,
+				FileName: files[j].FileName,
+				Size:     files[j].Size,
+				FileType: "application/octet-stream",
+			})
+		}
+		_ = sharedFiles
+	}
+}
+
+func BenchmarkSharedFilesPreallocated(b *testing.B) {
+	args := make([]string, 100)
+	files := make([]client.SendFileSource, 100)
+	for i := 0; i < 100; i++ {
+		args[i] = fmt.Sprintf("file_%d.txt", i)
+		files[i] = client.SendFileSource{
+			ID:       fmt.Sprintf("id_%d", i),
+			FileName: fmt.Sprintf("file_%d.txt", i),
+			Size:     1024,
+		}
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sharedFiles := make([]server.ShareFile, 0, len(args))
+		for j, arg := range args {
+			sharedFiles = append(sharedFiles, server.ShareFile{
+				ID:       files[j].ID,
+				Path:     arg,
+				FileName: files[j].FileName,
+				Size:     files[j].Size,
+				FileType: "application/octet-stream",
+			})
+		}
+		_ = sharedFiles
 	}
 }

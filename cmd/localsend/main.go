@@ -402,7 +402,7 @@ var sendCmd = &cobra.Command{
 		}
 
 		if browserMode {
-			var sharedFiles []server.ShareFile
+			sharedFiles := make([]server.ShareFile, 0, len(args))
 			for i, arg := range args {
 				sharedFiles = append(sharedFiles, server.ShareFile{
 					ID:       files[i].ID,
