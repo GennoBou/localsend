@@ -10,48 +10,130 @@ import (
 )
 
 func TestUploadSession_IsCompleted(t *testing.T) {
-	files := map[string]protocol.FileMetadata{
-		"file1": {ID: "file1", FileName: "test1.txt", Size: 100},
-		"file2": {ID: "file2", FileName: "test2.txt", Size: 200},
-		"file3": {ID: "file3", FileName: "empty.txt", Size: 0},
-	}
+	t.Run("empty session metadata", func(t *testing.T) {
+		sess := NewUploadSession("127.0.0.1", true, map[string]protocol.FileMetadata{})
+		if !sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be true for session with no files")
+		}
+	})
 
-	sess := NewUploadSession("127.0.0.1", true, files)
+	t.Run("only zero-byte files", func(t *testing.T) {
+		files := map[string]protocol.FileMetadata{
+			"zero1": {ID: "zero1", FileName: "empty1.txt", Size: 0},
+			"zero2": {ID: "zero2", FileName: "empty2.txt", Size: 0},
+		}
+		sess := NewUploadSession("127.0.0.1", true, files)
+		if !sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be true initially for all zero-byte files")
+		}
+	})
 
-	// Initially not completed
-	if sess.IsCompleted() {
-		t.Errorf("Expected IsCompleted to be false initially")
-	}
+	t.Run("step by step progress updates", func(t *testing.T) {
+		files := map[string]protocol.FileMetadata{
+			"file1": {ID: "file1", FileName: "test1.txt", Size: 100},
+			"file2": {ID: "file2", FileName: "test2.txt", Size: 200},
+			"file3": {ID: "file3", FileName: "empty.txt", Size: 0},
+		}
 
-	// Partially complete file1
-	sess.UpdateProgress("file1", 50)
-	if sess.IsCompleted() {
-		t.Errorf("Expected IsCompleted to be false when file1 is partial")
-	}
+		sess := NewUploadSession("127.0.0.1", true, files)
 
-	// Fully complete file1
-	sess.UpdateProgress("file1", 100)
-	if sess.IsCompleted() {
-		t.Errorf("Expected IsCompleted to be false when only file1 is completed")
-	}
+		// Initially not completed because file1 and file2 are pending
+		if sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be false initially")
+		}
 
-	// Over-complete file1
-	sess.UpdateProgress("file1", 150)
-	if sess.IsCompleted() {
-		t.Errorf("Expected IsCompleted to be false when file1 is over-completed")
-	}
+		// Partially complete file1
+		sess.UpdateProgress("file1", 50)
+		if sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be false when file1 is partial")
+		}
 
-	// Fully complete file2
-	sess.UpdateProgress("file2", 200)
-	if !sess.IsCompleted() {
-		t.Errorf("Expected IsCompleted to be true when all files (including 0-byte file3) are completed")
-	}
+		// Fully complete file1
+		sess.UpdateProgress("file1", 100)
+		if sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be false when only file1 and file3 are completed")
+		}
 
-	// Reduce progress of file1 below size
-	sess.UpdateProgress("file1", 80)
-	if sess.IsCompleted() {
-		t.Errorf("Expected IsCompleted to be false after file1 progress dropped below size")
-	}
+		// Over-complete file1
+		sess.UpdateProgress("file1", 150)
+		if sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be false when file1 is over-completed but file2 incomplete")
+		}
+
+		// Fully complete file2
+		sess.UpdateProgress("file2", 200)
+		if !sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be true when all files (including 0-byte file3) are completed")
+		}
+
+		// Reduce progress of file1 below size
+		sess.UpdateProgress("file1", 80)
+		if sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be false after file1 progress dropped below size")
+		}
+	})
+
+	t.Run("non-existent file ID update", func(t *testing.T) {
+		files := map[string]protocol.FileMetadata{
+			"file1": {ID: "file1", FileName: "test1.txt", Size: 100},
+		}
+		sess := NewUploadSession("127.0.0.1", true, files)
+
+		sess.UpdateProgress("unknown-file", 500)
+		if sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be false when unknown file progress is updated")
+		}
+
+		sess.UpdateProgress("file1", 100)
+		if !sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be true when file1 is completed despite unknown file updates")
+		}
+	})
+
+	t.Run("concurrent progress update and IsCompleted check", func(t *testing.T) {
+		files := map[string]protocol.FileMetadata{
+			"file1": {ID: "file1", FileName: "test1.txt", Size: 1000},
+			"file2": {ID: "file2", FileName: "test2.txt", Size: 1000},
+		}
+		sess := NewUploadSession("127.0.0.1", true, files)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			for i := int64(1); i <= 1000; i++ {
+				sess.UpdateProgress("file1", i)
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			for i := int64(1); i <= 1000; i++ {
+				sess.UpdateProgress("file2", i)
+			}
+		}()
+
+		// Concurrently check IsCompleted
+		done := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					_ = sess.IsCompleted()
+				}
+			}
+		}()
+
+		wg.Wait()
+		close(done)
+
+		if !sess.IsCompleted() {
+			t.Errorf("Expected IsCompleted to be true after both files reach 1000 bytes")
+		}
+	})
 }
 
 func TestSessionManager(t *testing.T) {
