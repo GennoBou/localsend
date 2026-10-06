@@ -100,7 +100,7 @@ func StartMulticastListener(ctx context.Context, myDevice protocol.Device, onDis
 		return fmt.Errorf("failed to get network interfaces: %w", err)
 	}
 
-	var listeners []*net.UDPConn
+	listeners := make([]*net.UDPConn, 0, len(interfaces)+1)
 	var successCount int
 	var lastReceived sync.Map // key: fingerprint+port, value: time.Time
 
