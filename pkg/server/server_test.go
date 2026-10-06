@@ -875,7 +875,7 @@ func TestHandleInfo(t *testing.T) {
 	})
 }
 
-// TestHandleRegister tests the POST /api/localsend/v2/register endpoint.
+// TestHandleRegister tests the POST /api/localsend/v2/register endpoint logic and HTTP routing.
 func TestHandleRegister(t *testing.T) {
 	s, cleanupServer := setupTestServer(t)
 	defer cleanupServer()
@@ -916,6 +916,9 @@ func TestHandleRegister(t *testing.T) {
 		if ownInfo.Alias != s.myDevice.Alias {
 			t.Errorf("expected own Alias %q, got %q", s.myDevice.Alias, ownInfo.Alias)
 		}
+		if ownInfo.Fingerprint != s.myDevice.Fingerprint {
+			t.Errorf("expected own Fingerprint %q, got %q", s.myDevice.Fingerprint, ownInfo.Fingerprint)
+		}
 		if discoveredDev.Fingerprint != sender.Fingerprint {
 			t.Errorf("expected discovered device fingerprint %q, got %q", sender.Fingerprint, discoveredDev.Fingerprint)
 		}
@@ -943,6 +946,66 @@ func TestHandleRegister(t *testing.T) {
 
 		if w.Result().StatusCode != http.StatusBadRequest {
 			t.Errorf("expected status 400 Bad Request, got %d", w.Result().StatusCode)
+		}
+	})
+
+	t.Run("POST /register without OnDiscover callback", func(t *testing.T) {
+		sNoCB, cleanupNoCB := setupTestServer(t)
+		defer cleanupNoCB()
+		sNoCB.OnDiscover = nil
+
+		sender := protocol.Device{
+			Alias:       "SenderNoCB",
+			Fingerprint: "peer-fp-nocb",
+		}
+		bodyBytes, _ := json.Marshal(sender)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/register", strings.NewReader(string(bodyBytes)))
+		w := httptest.NewRecorder()
+
+		sNoCB.handleRegister(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected status 200 OK, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("Full HTTP Mux Routing for /api/localsend/v2/register", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/localsend/v1/info", s.handleInfo)
+		mux.HandleFunc("/api/localsend/v2/info", s.handleInfo)
+		mux.HandleFunc("/api/localsend/v2/register", s.handleRegister)
+
+		ts := httptest.NewServer(mux)
+		defer ts.Close()
+
+		sender := protocol.Device{
+			Alias:       "MuxSender",
+			DeviceModel: "MuxModel",
+			DeviceType:  "desktop",
+			Fingerprint: "mux-fp-456",
+			Port:        53317,
+			Protocol:    "http",
+		}
+		bodyBytes, _ := json.Marshal(sender)
+
+		res, err := http.Post(ts.URL+"/api/localsend/v2/register", "application/json", strings.NewReader(string(bodyBytes)))
+		if err != nil {
+			t.Fatalf("failed to POST register endpoint: %v", err)
+		}
+		defer res.Body.Close()
+
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200 OK, got %d", res.StatusCode)
+		}
+
+		var ownInfo protocol.InfoResponse
+		if err := json.NewDecoder(res.Body).Decode(&ownInfo); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if ownInfo.Alias != s.myDevice.Alias {
+			t.Errorf("expected own Alias %q, got %q", s.myDevice.Alias, ownInfo.Alias)
 		}
 	})
 }
