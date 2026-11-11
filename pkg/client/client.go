@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 
 	"github.com/GennoBou/localsend/pkg/crypto"
 	"github.com/GennoBou/localsend/pkg/protocol"
@@ -181,7 +180,7 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 		targetURL += "?pin=" + pin
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, strings.NewReader(string(reqData)))
+	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(reqData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create prepare request: %w", err)
 	}
@@ -243,7 +242,14 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 			continue
 		}
 
-		err := c.uploadFile(ctx, target, uploadBaseURL, f, token, progress)
+		err := c.uploadFile(uploadFileParams{
+			ctx:               ctx,
+			targetFingerprint: target.Fingerprint,
+			uploadBaseURL:     uploadBaseURL,
+			file:              f,
+			token:             token,
+			progress:          progress,
+		})
 		if err != nil {
 			// Cancel the entire session if even one file fails
 			cancelSession()
@@ -257,9 +263,19 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 	return results, nil
 }
 
+// uploadFileParams encapsulates the arguments required to upload a single file.
+type uploadFileParams struct {
+	ctx               context.Context
+	targetFingerprint string
+	uploadBaseURL     string
+	file              SendFileSource
+	token             string
+	progress          func(fileID string, sentBytes int64)
+}
+
 // uploadFile performs the upload of a single file to the target device.
-func (c *Client) uploadFile(ctx context.Context, target *protocol.Device, uploadBaseURL string, f SendFileSource, token string, progress func(fileID string, sentBytes int64)) error {
-	fileReader, err := f.Open()
+func (c *Client) uploadFile(params uploadFileParams) error {
+	fileReader, err := params.file.Open()
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
@@ -267,18 +283,18 @@ func (c *Client) uploadFile(ctx context.Context, target *protocol.Device, upload
 
 	progReader := &progressReader{
 		r:        fileReader,
-		fileID:   f.ID,
-		progress: progress,
-		total:    f.Size,
+		fileID:   params.file.ID,
+		progress: params.progress,
+		total:    params.file.Size,
 	}
 
-	uploadURL := uploadBaseURL + "&fileId=" + f.ID + "&token=" + token
+	uploadURL := params.uploadBaseURL + "&fileId=" + params.file.ID + "&token=" + params.token
 
-	req, err := http.NewRequestWithContext(ctx, "POST", uploadURL, io.NopCloser(progReader))
+	req, err := http.NewRequestWithContext(params.ctx, "POST", uploadURL, io.NopCloser(progReader))
 	if err != nil {
 		return fmt.Errorf("failed to create upload request: %w", err)
 	}
-	req.ContentLength = f.Size
+	req.ContentLength = params.file.Size
 	req.Header.Set("Content-Type", "application/octet-stream")
 
 	resp, err := c.httpClient.Do(req)
@@ -287,7 +303,7 @@ func (c *Client) uploadFile(ctx context.Context, target *protocol.Device, upload
 	}
 	defer resp.Body.Close()
 
-	if err := c.verifyPeerFingerprint(resp, target.Fingerprint); err != nil {
+	if err := c.verifyPeerFingerprint(resp, params.targetFingerprint); err != nil {
 		return fmt.Errorf("failed to verify peer: %w", err)
 	}
 
@@ -307,7 +323,7 @@ func (c *Client) Register(ctx context.Context, target *protocol.Device) (*protoc
 	url := fmt.Sprintf("%s://%s:%d/api/localsend/v2/register", target.Protocol, target.IP, target.Port)
 	reqData, _ := json.Marshal(c.myDevice)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(reqData)))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create register request: %w", err)
 	}

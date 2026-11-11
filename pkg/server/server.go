@@ -539,6 +539,8 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 					Value:    s.pin,
 					Path:     "/",
 					HttpOnly: true,
+					Secure:   r.TLS != nil,
+					SameSite: http.SameSiteLaxMode,
 				})
 				http.Redirect(w, r, "/", http.StatusSeeOther)
 				return

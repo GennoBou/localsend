@@ -32,7 +32,7 @@ var (
 	discoveryModeFlag string
 )
 
-func logDebug(format string, v ...interface{}) {
+func logDebug(format string, v ...any) {
 	if !debugFlag {
 		return
 	}
@@ -153,13 +153,13 @@ var receiveCmd = &cobra.Command{
 			}
 
 			if currentPort < maxPort {
-				fmt.Println(i18n.T("port_bind_failed", map[string]interface{}{
+				fmt.Println(i18n.T("port_bind_failed", map[string]any{
 					"Port":     currentPort,
 					"NextPort": currentPort + 1,
 				}))
 				currentPort++
 			} else {
-				fmt.Println(i18n.T("all_port_bind_failed", map[string]interface{}{
+				fmt.Println(i18n.T("all_port_bind_failed", map[string]any{
 					"MaxPort": maxPort,
 				}))
 				os.Exit(1)
@@ -218,22 +218,19 @@ var receiveCmd = &cobra.Command{
 			}
 
 			fmt.Println()
-			fmt.Println(i18n.T("receiving_request", map[string]interface{}{
+			fmt.Println(i18n.T("receiving_request", map[string]any{
 				"Alias": sender.Alias,
 				"IP":    sender.IP,
 			}))
-			for _, f := range files {
-				fmt.Printf("  - %s (%d bytes)\n", f.FileName, f.Size)
-			}
-
 			var totalSize int64
 			for _, f := range files {
+				fmt.Printf("  - %s (%d bytes)\n", f.FileName, f.Size)
 				totalSize += f.Size
 			}
 
 			fmt.Println()
 			for {
-				fmt.Print(i18n.T("confirm_receive", map[string]interface{}{
+				fmt.Print(i18n.T("confirm_receive", map[string]any{
 					"Count": len(files),
 					"Size":  totalSize,
 				}))
@@ -256,7 +253,7 @@ var receiveCmd = &cobra.Command{
 
 		srv.OnDone = func(sessionID string, fileID string, savedPath string) {
 			fmt.Println()
-			fmt.Println(i18n.T("saving_to", map[string]interface{}{
+			fmt.Println(i18n.T("saving_to", map[string]any{
 				"Path": savedPath,
 			}))
 		}
@@ -300,7 +297,7 @@ var receiveCmd = &cobra.Command{
 			defer advertiserCloser.Close()
 		}
 
-		fmt.Println(i18n.T("receiving_mode", map[string]interface{}{
+		fmt.Println(i18n.T("receiving_mode", map[string]any{
 			"Port":  port,
 			"Alias": myDevice.Alias,
 		}))
@@ -429,7 +426,7 @@ var sendCmd = &cobra.Command{
 				displayIP = localIPs[0]
 			}
 
-			fmt.Println(i18n.T("download_api_started", map[string]interface{}{
+			fmt.Println(i18n.T("download_api_started", map[string]any{
 				"IP":   displayIP,
 				"Port": srvPort,
 			}))
@@ -563,7 +560,7 @@ var sendCmd = &cobra.Command{
 		}
 
 		fmt.Println()
-		fmt.Println(i18n.T("sending_files", map[string]interface{}{
+		fmt.Println(i18n.T("sending_files", map[string]any{
 			"Alias": targetDevice.Alias,
 		}))
 
@@ -590,7 +587,7 @@ var sendCmd = &cobra.Command{
 				fmt.Println(i18n.T("transfer_rejected", nil))
 				os.Exit(3)
 			}
-			fmt.Println(i18n.T("transfer_failed", map[string]interface{}{
+			fmt.Println(i18n.T("transfer_failed", map[string]any{
 				"Error": err.Error(),
 			}))
 			os.Exit(4)

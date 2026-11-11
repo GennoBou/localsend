@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -100,7 +101,7 @@ func StartMulticastListener(ctx context.Context, myDevice protocol.Device, onDis
 		return fmt.Errorf("failed to get network interfaces: %w", err)
 	}
 
-	var listeners []*net.UDPConn
+	listeners := make([]*net.UDPConn, 0, len(interfaces)+1)
 	var successCount int
 	var lastReceived sync.Map // key: fingerprint+port, value: time.Time
 
@@ -239,6 +240,11 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 		Timeout:   500 * time.Millisecond, // Timeout for each host is 500ms
 	}
 
+	reqBody, err := json.Marshal(myDevice)
+	if err != nil {
+		return
+	}
+
 	// 1. Scan conflict ports (53317-53326) against own local IPs and loopback
 	// to discover other instances on the same host
 	targetIPs := append(localIPs, "127.0.0.1")
@@ -253,18 +259,17 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 			wg.Add(1)
 			sem <- struct{}{}
 			go func(targetIP string, targetPort int) {
-				defer func() {
-					<-sem
-					wg.Done()
-				}()
 				scanHost(ScanConfig{
 					Ctx:        ctx,
 					Client:     client,
 					MyDevice:   myDevice,
+					ReqBody:    reqBody,
 					IP:         targetIP,
 					Port:       targetPort,
 					OnDiscover: onDiscover,
 				})
+				<-sem
+				wg.Done()
 			}(ip, port)
 		}
 	}
@@ -288,18 +293,17 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 			sem <- struct{}{}
 
 			go func(ip string) {
-				defer func() {
-					<-sem
-					wg.Done()
-				}()
 				scanHost(ScanConfig{
 					Ctx:        ctx,
 					Client:     client,
 					MyDevice:   myDevice,
+					ReqBody:    reqBody,
 					IP:         ip,
 					Port:       protocol.DefaultPort,
 					OnDiscover: onDiscover,
 				})
+				<-sem
+				wg.Done()
 			}(targetIP)
 		}
 	}
@@ -312,6 +316,7 @@ type ScanConfig struct {
 	Ctx        context.Context
 	Client     *http.Client
 	MyDevice   protocol.Device
+	ReqBody    []byte
 	IP         string
 	Port       int
 	OnDiscover func(protocol.Device)
@@ -319,16 +324,20 @@ type ScanConfig struct {
 
 // scanHost performs device discovery by sending a registration request to a specific IP and port.
 func scanHost(cfg ScanConfig) {
-	reqBody, err := json.Marshal(cfg.MyDevice)
-	if err != nil {
-		return
+	reqBody := cfg.ReqBody
+	if len(reqBody) == 0 {
+		var err error
+		reqBody, err = json.Marshal(cfg.MyDevice)
+		if err != nil {
+			return
+		}
 	}
 
 	protocols := []string{"https", "http"}
 	for _, proto := range protocols {
 		url := fmt.Sprintf("%s://%s:%d/api/localsend/v2/register", proto, cfg.IP, cfg.Port)
 
-		req, err := http.NewRequestWithContext(cfg.Ctx, "POST", url, strings.NewReader(string(reqBody)))
+		req, err := http.NewRequestWithContext(cfg.Ctx, "POST", url, bytes.NewReader(reqBody))
 		if err != nil {
 			continue
 		}

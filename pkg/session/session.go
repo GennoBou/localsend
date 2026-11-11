@@ -194,14 +194,14 @@ func (m *SessionManager) startCleanupLoop(interval time.Duration) {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
-			now := time.Now()
+			cutoff := time.Now().Add(-m.timeout)
 			m.sessions.Range(func(key, value any) bool {
 				session := value.(*UploadSession)
 				session.mu.RLock()
 				lastAccess := session.LastAccess
 				session.mu.RUnlock()
 
-				if now.Sub(lastAccess) > m.timeout {
+				if lastAccess.Before(cutoff) {
 					if val, loaded := m.sessions.LoadAndDelete(key); loaded {
 						val.(*UploadSession).Cancel()
 					}
