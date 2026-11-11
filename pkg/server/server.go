@@ -188,7 +188,7 @@ func (s *Server) areAllFilesDuplicate(files map[string]protocol.FileMetadata) bo
 		return false
 	}
 	for _, f := range files {
-		cleanName := filepath.Base(f.FileName)
+		cleanName := protocol.SanitizeFileName(f.FileName)
 		targetPath := filepath.Join(s.saveDir, cleanName)
 		info, err := os.Stat(targetPath)
 		if err != nil || info.Size() != f.Size {
@@ -333,18 +333,28 @@ func (s *Server) validateUploadRequest(r *http.Request) (*session.UploadSession,
 }
 
 // saveUploadedFile reads data from the reader, writes to disk, monitors progress, and verifies checksum.
+// It uses an atomic .part file during streaming to prevent partially written files or premature reading,
+// and guarantees automatic cleanup on network interruptions, short writes, or verification failures.
 func (s *Server) saveUploadedFile(sessionObj *session.UploadSession, fileMeta protocol.FileMetadata, body io.Reader) (string, int, string) {
 	sessionID := sessionObj.ID
 	fileID := fileMeta.ID
 
 	// Determine a unique save path to avoid conflicts
 	savedPath := getUniquePath(s.saveDir, fileMeta.FileName)
+	partPath := savedPath + ".part"
 
-	file, err := os.Create(savedPath)
+	file, err := os.Create(partPath)
 	if err != nil {
 		return "", http.StatusInternalServerError, "Failed to create file"
 	}
-	defer file.Close()
+
+	var completed bool
+	defer func() {
+		_ = file.Close()
+		if !completed {
+			_ = os.Remove(partPath)
+		}
+	}()
 
 	hasher := sha256.New()
 	writer := io.MultiWriter(file, hasher)
@@ -356,8 +366,6 @@ func (s *Server) saveUploadedFile(sessionObj *session.UploadSession, fileMeta pr
 	for {
 		// Check if the session was canceled in the middle
 		if sessionObj.IsCanceled() {
-			file.Close()
-			_ = os.Remove(savedPath)
 			return "", http.StatusBadRequest, "Upload canceled"
 		}
 
@@ -390,12 +398,20 @@ func (s *Server) saveUploadedFile(sessionObj *session.UploadSession, fileMeta pr
 	if fileMeta.Sha256 != "" {
 		calculatedHash := hex.EncodeToString(hasher.Sum(nil))
 		if !strings.EqualFold(calculatedHash, fileMeta.Sha256) {
-			file.Close()
-			_ = os.Remove(savedPath)
 			return "", http.StatusUnprocessableEntity, "Checksum mismatch"
 		}
 	}
 
+	// Close before renaming (required on Windows)
+	if err := file.Close(); err != nil {
+		return "", http.StatusInternalServerError, "Failed to close file"
+	}
+
+	if err := os.Rename(partPath, savedPath); err != nil {
+		return "", http.StatusInternalServerError, "Failed to finalize file"
+	}
+
+	completed = true
 	return savedPath, http.StatusOK, ""
 }
 
@@ -455,7 +471,7 @@ func (s *Server) checkClientCertificate(r *http.Request) (string, bool) {
 
 // getUniquePath returns a unique path in the save directory that does not conflict with existing filenames.
 func getUniquePath(dir, filename string) string {
-	cleanName := filepath.Base(filename)
+	cleanName := protocol.SanitizeFileName(filename)
 	ext := filepath.Ext(cleanName)
 	base := cleanName[:len(cleanName)-len(ext)]
 	path := filepath.Join(dir, cleanName)
@@ -480,7 +496,12 @@ func (s *Server) StartDownloadServer(port int, sharedFiles []ShareFile) error {
 		return fmt.Errorf("download server is already running")
 	}
 
-	s.sharedFiles = sharedFiles
+	sanitizedFiles := make([]ShareFile, len(sharedFiles))
+	for i, f := range sharedFiles {
+		f.FileName = protocol.SanitizeFileName(f.FileName)
+		sanitizedFiles[i] = f
+	}
+	s.sharedFiles = sanitizedFiles
 	s.downloadSession = uuid.NewString()
 
 	mux := http.NewServeMux()

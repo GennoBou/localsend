@@ -1271,3 +1271,50 @@ func TestFilterAcceptedFiles(t *testing.T) {
 	})
 }
 
+// TestUpload_EmptyFile tests uploading a 0-byte empty file with valid SHA-256 checksum.
+func TestUpload_EmptyFile(t *testing.T) {
+	s, cleanupServer := setupTestServer(t)
+	defer cleanupServer()
+
+	emptyHash := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	meta := protocol.FileMetadata{
+		ID:       "empty-file-id",
+		FileName: "empty.txt",
+		Size:     0,
+		FileType: "text/plain",
+		Sha256:   emptyHash,
+	}
+	filesMeta := map[string]protocol.FileMetadata{meta.ID: meta}
+
+	sessionObj := s.sessionMgr.CreateSession("127.0.0.1", false, filesMeta)
+	token, _, ok := sessionObj.GetFileTokenAndMeta(meta.ID)
+	if !ok {
+		t.Fatalf("failed to retrieve file token")
+	}
+
+	query := url.Values{}
+	query.Set("sessionId", sessionObj.ID)
+	query.Set("fileId", meta.ID)
+	query.Set("token", token)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/localsend/v2/upload?"+query.Encode(), strings.NewReader(""))
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+
+	s.handleUpload(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200 OK for 0-byte file, got %d", resp.StatusCode)
+	}
+
+	savedFile := filepath.Join(s.saveDir, "empty.txt")
+	info, err := os.Stat(savedFile)
+	if err != nil {
+		t.Fatalf("saved 0-byte file not found: %v", err)
+	}
+	if info.Size() != 0 {
+		t.Errorf("expected file size 0, got %d", info.Size())
+	}
+}
+

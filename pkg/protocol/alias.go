@@ -1,8 +1,8 @@
 package protocol
 
 import (
-	"math/rand"
-	"time"
+	cryptoRand "crypto/rand"
+	"math/big"
 )
 
 var adjectives = []string{
@@ -18,8 +18,13 @@ var fruits = []string{
 
 // GenerateRandomAlias generates a random LocalSend-style alias combining an adjective and a fruit.
 func GenerateRandomAlias() string {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	adj := adjectives[r.Intn(len(adjectives))]
-	fruit := fruits[r.Intn(len(fruits))]
-	return adj + " " + fruit
+	adjIdx, err := cryptoRand.Int(cryptoRand.Reader, big.NewInt(int64(len(adjectives))))
+	if err != nil {
+		return adjectives[0] + " " + fruits[0]
+	}
+	fruitIdx, err := cryptoRand.Int(cryptoRand.Reader, big.NewInt(int64(len(fruits))))
+	if err != nil {
+		return adjectives[0] + " " + fruits[0]
+	}
+	return adjectives[adjIdx.Int64()] + " " + fruits[fruitIdx.Int64()]
 }

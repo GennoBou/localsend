@@ -9,11 +9,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/GennoBou/localsend/internal/i18n"
@@ -261,6 +264,17 @@ var receiveCmd = &cobra.Command{
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sigChan
+			logDebug("シャットダウンシグナルを受信しました。終了処理を実行します...")
+			cancel()
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer shutdownCancel()
+			_ = srv.Shutdown(shutdownCtx)
+		}()
+
 		onDiscover := func(dev protocol.Device) {
 			logDebug("Multicast discovery: %s (%s) - %s://%s:%d", dev.Alias, dev.DeviceModel, dev.Protocol, dev.IP, dev.Port)
 		}
@@ -303,7 +317,7 @@ var receiveCmd = &cobra.Command{
 		}))
 
 		err = srv.Start(port)
-		if err != nil {
+		if err != nil && err != http.ErrServerClosed {
 			fmt.Printf("Server failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -365,7 +379,7 @@ var sendCmd = &cobra.Command{
 				filePath := path
 				fileSources[idx] = client.SendFileSource{
 					ID:       uuid.NewString(),
-					FileName: filepath.Base(filePath),
+					FileName: protocol.SanitizeFileName(filePath),
 					Size:     info.Size(),
 					FileType: "application/octet-stream",
 					Sha256:   hashStr,

@@ -238,6 +238,10 @@ func ScanLegacy(ctx context.Context, myDevice protocol.Device, onDiscover func(p
 	client := &http.Client{
 		Transport: tr,
 		Timeout:   500 * time.Millisecond, // Timeout for each host is 500ms
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Do not follow HTTP redirects sent by peers (prevent SSRF and open redirect attacks)
+			return http.ErrUseLastResponse
+		},
 	}
 
 	reqBody, err := json.Marshal(myDevice)
