@@ -1318,3 +1318,103 @@ func TestUpload_EmptyFile(t *testing.T) {
 	}
 }
 
+// TestAreAllFilesDuplicate verifies duplicate detection behavior using os.OpenRoot,
+// including path traversal protection and directory rejection.
+func TestAreAllFilesDuplicate(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T, s *Server)
+		files    map[string]protocol.FileMetadata
+		expected bool
+	}{
+		{
+			name:     "Empty file map returns false",
+			files:    map[string]protocol.FileMetadata{},
+			expected: false,
+		},
+		{
+			name: "Single matching file returns true",
+			setup: func(t *testing.T, s *Server) {
+				if err := os.WriteFile(filepath.Join(s.saveDir, "dup.txt"), []byte("12345"), 0644); err != nil {
+					t.Fatalf("failed to create test file: %v", err)
+				}
+			},
+			files: map[string]protocol.FileMetadata{
+				"f1": {ID: "f1", FileName: "dup.txt", Size: 5},
+			},
+			expected: true,
+		},
+		{
+			name: "Size mismatch returns false",
+			setup: func(t *testing.T, s *Server) {
+				if err := os.WriteFile(filepath.Join(s.saveDir, "dup.txt"), []byte("12345"), 0644); err != nil {
+					t.Fatalf("failed to create test file: %v", err)
+				}
+			},
+			files: map[string]protocol.FileMetadata{
+				"f1": {ID: "f1", FileName: "dup.txt", Size: 99},
+			},
+			expected: false,
+		},
+		{
+			name: "Missing file returns false",
+			files: map[string]protocol.FileMetadata{
+				"f1": {ID: "f1", FileName: "missing.txt", Size: 5},
+			},
+			expected: false,
+		},
+		{
+			name: "Subdirectory with same name returns false",
+			setup: func(t *testing.T, s *Server) {
+				subDir := filepath.Join(s.saveDir, "subdir")
+				if err := os.Mkdir(subDir, 0755); err != nil {
+					t.Fatalf("failed to create subdir: %v", err)
+				}
+			},
+			files: map[string]protocol.FileMetadata{
+				"f1": {ID: "f1", FileName: "subdir", Size: 0},
+			},
+			expected: false,
+		},
+		{
+			name: "Path traversal filename cannot match parent file",
+			setup: func(t *testing.T, s *Server) {
+				parentFile := filepath.Join(filepath.Dir(s.saveDir), "parent_secret.txt")
+				if err := os.WriteFile(parentFile, []byte("secret"), 0644); err != nil {
+					t.Fatalf("failed to create parent file: %v", err)
+				}
+				t.Cleanup(func() { _ = os.Remove(parentFile) })
+			},
+			files: map[string]protocol.FileMetadata{
+				"f1": {ID: "f1", FileName: "../parent_secret.txt", Size: 6},
+			},
+			expected: false,
+		},
+		{
+			name: "Non-existent saveDir returns false",
+			setup: func(t *testing.T, s *Server) {
+				s.saveDir = filepath.Join(s.saveDir, "does-not-exist")
+			},
+			files: map[string]protocol.FileMetadata{
+				"f1": {ID: "f1", FileName: "dup.txt", Size: 5},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, cleanup := setupTestServer(t)
+			defer cleanup()
+
+			if tt.setup != nil {
+				tt.setup(t, s)
+			}
+
+			got := s.areAllFilesDuplicate(tt.files)
+			if got != tt.expected {
+				t.Errorf("areAllFilesDuplicate() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}

@@ -10,8 +10,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/GennoBou/localsend/pkg/crypto"
 	"github.com/GennoBou/localsend/pkg/protocol"
 )
 
@@ -466,3 +468,142 @@ func TestClient_NewClient_Options(t *testing.T) {
 	})
 }
 
+func TestClient_TLSFingerprintVerificationDuringHandshake(t *testing.T) {
+	var handlerCalled atomic.Bool
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalled.Store(true)
+		switch r.URL.Path {
+		case "/api/localsend/v2/register":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(protocol.Device{
+				Alias:       "TLSReceiver",
+				Version:     "2.0",
+				Fingerprint: "ignored-in-body",
+			})
+		case "/api/localsend/v2/prepare-upload":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("failed to parse TLS server URL: %v", err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("failed to parse TLS server port: %v", err)
+	}
+
+	validFingerprint := crypto.CalculateFingerprint(server.Certificate().Raw)
+	wrongFingerprint := strings.Repeat("0", 64)
+
+	tests := []struct {
+		name              string
+		targetFingerprint string
+		insecure          bool
+		expectErr         bool
+		expectCalled      bool
+	}{
+		{
+			name:              "Valid fingerprint succeeds",
+			targetFingerprint: validFingerprint,
+			insecure:          false,
+			expectErr:         false,
+			expectCalled:      true,
+		},
+		{
+			name:              "Mismatched fingerprint fails during handshake without sending HTTP request",
+			targetFingerprint: wrongFingerprint,
+			insecure:          false,
+			expectErr:         true,
+			expectCalled:      false,
+		},
+		{
+			name:              "Empty fingerprint skips verification",
+			targetFingerprint: "",
+			insecure:          false,
+			expectErr:         false,
+			expectCalled:      true,
+		},
+		{
+			name:              "Insecure mode bypasses mismatched fingerprint",
+			targetFingerprint: wrongFingerprint,
+			insecure:          true,
+			expectErr:         false,
+			expectCalled:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handlerCalled.Store(false)
+
+			client, err := NewClient(protocol.Device{
+				Alias:       "TestSender",
+				Version:     "2.0",
+				Fingerprint: "sender-fp",
+			}, nil, "", tt.insecure, "")
+			if err != nil {
+				t.Fatalf("NewClient failed: %v", err)
+			}
+
+			target := &protocol.Device{
+				Alias:       "TLSReceiver",
+				Version:     "2.0",
+				Fingerprint: tt.targetFingerprint,
+				IP:          u.Hostname(),
+				Port:        port,
+				Protocol:    "https",
+			}
+
+			_, err = client.Register(context.Background(), target)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), "fingerprint mismatch") {
+					t.Errorf("expected fingerprint mismatch error, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("expected nil error on Register, got %v", err)
+			}
+
+			if gotCalled := handlerCalled.Load(); gotCalled != tt.expectCalled {
+				t.Errorf("handlerCalled = %v, want %v", gotCalled, tt.expectCalled)
+			}
+
+			// Also verify SendFiles uses the same handshake fingerprint check.
+			handlerCalled.Store(false)
+			files := []SendFileSource{
+				{
+					ID:       "f1",
+					FileName: "hello.txt",
+					Size:     5,
+					FileType: "text/plain",
+					Open: func() (io.ReadCloser, error) {
+						return io.NopCloser(strings.NewReader("hello")), nil
+					},
+				},
+			}
+			_, err = client.SendFiles(context.Background(), target, files, "1234", nil)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("expected error on SendFiles, got nil")
+				}
+				if !strings.Contains(err.Error(), "fingerprint mismatch") {
+					t.Errorf("expected fingerprint mismatch error on SendFiles, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("expected nil error on SendFiles, got %v", err)
+			}
+
+			if gotCalled := handlerCalled.Load(); gotCalled != tt.expectCalled {
+				t.Errorf("SendFiles handlerCalled = %v, want %v", gotCalled, tt.expectCalled)
+			}
+		})
+	}
+}

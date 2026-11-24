@@ -187,11 +187,16 @@ func (s *Server) areAllFilesDuplicate(files map[string]protocol.FileMetadata) bo
 	if len(files) == 0 {
 		return false
 	}
+	root, err := os.OpenRoot(s.saveDir)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+
 	for _, f := range files {
 		cleanName := protocol.SanitizeFileName(f.FileName)
-		targetPath := filepath.Join(s.saveDir, cleanName)
-		info, err := os.Stat(targetPath)
-		if err != nil || info.Size() != f.Size {
+		info, err := root.Stat(cleanName)
+		if err != nil || info.IsDir() || info.Size() != f.Size {
 			return false
 		}
 	}

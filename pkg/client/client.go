@@ -96,14 +96,48 @@ func NewClient(myDevice protocol.Device, clientCert *tls.Certificate, proxyURL s
 		tlsConfig.RootCAs = caCertPool
 	}
 
+	baseDialer := &net.Dialer{
+		Timeout:   15 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
 	transport := &http.Transport{
-		TLSClientConfig: tlsConfig,
-		DialContext: (&net.Dialer{
-			Timeout:   15 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		TLSClientConfig:       tlsConfig,
+		DialContext:           baseDialer.DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	// Verify peer TLS fingerprint during handshake when no proxy is configured and --insecure is false.
+	// When proxyURL is set, keep standard Proxy dialing and rely on post-response verification.
+	if proxyURL == "" && !insecure {
+		transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			rawConn, err := baseDialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+
+			cfg := tlsConfig.Clone()
+			if cfg.ServerName == "" {
+				if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
+					cfg.ServerName = host
+				}
+			}
+			if expectedFP := expectedFingerprintFromContext(ctx); expectedFP != "" {
+				cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+					return verifyPeerCertificatesFingerprint(cs.PeerCertificates, expectedFP)
+				}
+			}
+
+			tlsConn := tls.Client(rawConn, cfg)
+			handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+				_ = rawConn.Close()
+				return nil, err
+			}
+			return tlsConn, nil
+		}
 	}
 
 	if proxyURL != "" {
@@ -131,6 +165,36 @@ func NewClient(myDevice protocol.Device, clientCert *tls.Certificate, proxyURL s
 	}, nil
 }
 
+type expectedFingerprintContextKey struct{}
+
+func withExpectedFingerprint(ctx context.Context, fingerprint string) context.Context {
+	if fingerprint == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, expectedFingerprintContextKey{}, fingerprint)
+}
+
+func expectedFingerprintFromContext(ctx context.Context) string {
+	fp, _ := ctx.Value(expectedFingerprintContextKey{}).(string)
+	return fp
+}
+
+func verifyPeerCertificatesFingerprint(peerCerts []*x509.Certificate, expectedFingerprint string) error {
+	if expectedFingerprint == "" {
+		// Allow it as unverifiable if no expected hash is specified
+		return nil
+	}
+	if len(peerCerts) == 0 {
+		return fmt.Errorf("no peer certificate found")
+	}
+
+	actualFingerprint := crypto.CalculateFingerprint(peerCerts[0].Raw)
+	if actualFingerprint != expectedFingerprint {
+		return fmt.Errorf("TLS certificate fingerprint mismatch. Expected: %s, Got: %s (potential MITM attack)", expectedFingerprint, actualFingerprint)
+	}
+	return nil
+}
+
 // verifyPeerFingerprint matches the fingerprint of the certificate retrieved from the destination with the expected value.
 func (c *Client) verifyPeerFingerprint(resp *http.Response, expectedFingerprint string) error {
 	if c.insecure {
@@ -141,21 +205,7 @@ func (c *Client) verifyPeerFingerprint(resp *http.Response, expectedFingerprint 
 		// TLS verification is not needed for HTTP communication
 		return nil
 	}
-	if expectedFingerprint == "" {
-		// Allow it as unverifiable if no expected hash is specified
-		return nil
-	}
-	if len(resp.TLS.PeerCertificates) == 0 {
-		return fmt.Errorf("no peer certificate found")
-	}
-
-	peerCert := resp.TLS.PeerCertificates[0]
-	actualFingerprint := crypto.CalculateFingerprint(peerCert.Raw)
-
-	if actualFingerprint != expectedFingerprint {
-		return fmt.Errorf("TLS certificate fingerprint mismatch. Expected: %s, Got: %s (potential MITM attack)", expectedFingerprint, actualFingerprint)
-	}
-	return nil
+	return verifyPeerCertificatesFingerprint(resp.TLS.PeerCertificates, expectedFingerprint)
 }
 
 // SendFiles sends multiple files in bulk to the specified target device.
@@ -188,7 +238,8 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 		targetURL += "?pin=" + pin
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(reqData))
+	prepareCtx := withExpectedFingerprint(ctx, target.Fingerprint)
+	req, err := http.NewRequestWithContext(prepareCtx, "POST", targetURL, bytes.NewReader(reqData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create prepare request: %w", err)
 	}
@@ -234,7 +285,8 @@ func (c *Client) SendFiles(ctx context.Context, target *protocol.Device, files [
 	// Helper function to cancel the session
 	cancelSession := func() {
 		cancelURL := fmt.Sprintf("%s://%s:%d/api/localsend/v2/cancel?sessionId=%s", target.Protocol, target.IP, target.Port, sessionID)
-		cancelReq, err := http.NewRequest("POST", cancelURL, nil)
+		cancelCtx := withExpectedFingerprint(context.Background(), target.Fingerprint)
+		cancelReq, err := http.NewRequestWithContext(cancelCtx, "POST", cancelURL, nil)
 		if err == nil {
 			_, _ = c.httpClient.Do(cancelReq)
 		}
@@ -298,7 +350,8 @@ func (c *Client) uploadFile(params uploadFileParams) error {
 
 	uploadURL := params.uploadBaseURL + "&fileId=" + params.file.ID + "&token=" + params.token
 
-	req, err := http.NewRequestWithContext(params.ctx, "POST", uploadURL, io.NopCloser(progReader))
+	uploadCtx := withExpectedFingerprint(params.ctx, params.targetFingerprint)
+	req, err := http.NewRequestWithContext(uploadCtx, "POST", uploadURL, io.NopCloser(progReader))
 	if err != nil {
 		return fmt.Errorf("failed to create upload request: %w", err)
 	}
@@ -331,7 +384,8 @@ func (c *Client) Register(ctx context.Context, target *protocol.Device) (*protoc
 	url := fmt.Sprintf("%s://%s:%d/api/localsend/v2/register", target.Protocol, target.IP, target.Port)
 	reqData, _ := json.Marshal(c.myDevice)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqData))
+	regCtx := withExpectedFingerprint(ctx, target.Fingerprint)
+	req, err := http.NewRequestWithContext(regCtx, "POST", url, bytes.NewReader(reqData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create register request: %w", err)
 	}
